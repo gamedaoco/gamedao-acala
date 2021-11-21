@@ -19,10 +19,7 @@
 use super::*;
 use crate::evm::EvmAddress;
 use frame_support::assert_ok;
-use std::{
-	convert::{TryFrom, TryInto},
-	str::FromStr,
-};
+use std::str::FromStr;
 
 #[test]
 fn trading_pair_works() {

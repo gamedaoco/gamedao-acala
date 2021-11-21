@@ -33,10 +33,7 @@ use primitives::{
 	evm::{Erc20Info, EvmAddress},
 	*,
 };
-use sp_std::{
-	convert::{TryFrom, TryInto},
-	vec::Vec,
-};
+use sp_std::vec::Vec;
 
 mod mock;
 mod tests;

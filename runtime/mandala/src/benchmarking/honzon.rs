@@ -23,7 +23,6 @@ use crate::{
 };
 
 use super::utils::{feed_price, set_balance};
-use core::convert::TryInto;
 use frame_benchmarking::{account, whitelisted_caller};
 use frame_system::RawOrigin;
 use module_dex::TradingPairStatus;

@@ -36,7 +36,7 @@ use sp_runtime::{
 	traits::{AccountIdConversion, Convert, Zero},
 	ArithmeticError, DispatchResult, RuntimeDebug,
 };
-use sp_std::{convert::TryInto, result};
+use sp_std::result;
 use support::{CDPTreasury, RiskManager};
 
 mod mock;
