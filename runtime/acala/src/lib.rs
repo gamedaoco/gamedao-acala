@@ -85,9 +85,9 @@ mod weights;
 pub use frame_support::{
 	construct_runtime, log, parameter_types,
 	traits::{
-		Contains, ContainsLengthBound, Currency as PalletCurrency, EnsureOrigin, Everything, Get, Imbalance,
-		InstanceFilter, IsSubType, IsType, KeyOwnerProofSystem, LockIdentifier, Nothing, OnUnbalanced, Randomness,
-		SortedMembers, U128CurrencyToVote,
+		Contains, ContainsLengthBound, Currency as PalletCurrency, EnsureOrigin, EqualPrivilegeOnly, Everything, Get,
+		Imbalance, InstanceFilter, IsSubType, IsType, KeyOwnerProofSystem, LockIdentifier, Nothing, OnUnbalanced,
+		Randomness, SortedMembers, U128CurrencyToVote,
 	},
 	weights::{constants::RocksDbWeight, IdentityFee, Weight},
 	PalletId, RuntimeDebug, StorageValue,
@@ -514,6 +514,7 @@ impl pallet_membership::Config<OperatorMembershipInstanceAcala> for Runtime {
 impl pallet_utility::Config for Runtime {
 	type Event = Event;
 	type Call = Call;
+	type PalletsOrigin = OriginCaller;
 	type WeightInfo = ();
 }
 
@@ -829,7 +830,7 @@ impl module_currencies::Config for Runtime {
 	type GetNativeCurrencyId = GetNativeCurrencyId;
 	type WeightInfo = weights::module_currencies::WeightInfo<Runtime>;
 	type AddressMapping = EvmAddressMapping<Runtime>;
-	type EVMBridge = EVMBridge;
+	type EVMBridge = module_evm_bridge::EVMBridge<Runtime>;
 	type SweepOrigin = EnsureRootOrOneGeneralCouncil;
 	type OnDust = module_currencies::TransferDust<Runtime, AcalaTreasuryAccount>;
 }
@@ -896,6 +897,7 @@ impl pallet_scheduler::Config for Runtime {
 	type ScheduleOrigin = EnsureRoot<AccountId>;
 	type MaxScheduledPerBlock = MaxScheduledPerBlock;
 	type WeightInfo = ();
+	type OriginPrivilegeCmp = EqualPrivilegeOnly;
 }
 
 parameter_types! {
@@ -1129,7 +1131,7 @@ impl module_evm_accounts::Config for Runtime {
 impl module_asset_registry::Config for Runtime {
 	type Event = Event;
 	type Currency = Balances;
-	type EVMBridge = EVMBridge;
+	type EVMBridge = module_evm_bridge::EVMBridge<Runtime>;
 	type RegisterOrigin = EnsureRootOrHalfGeneralCouncil;
 	type WeightInfo = weights::module_asset_registry::WeightInfo<Runtime>;
 }

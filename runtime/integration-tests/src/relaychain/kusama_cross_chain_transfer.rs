@@ -22,9 +22,6 @@ use crate::relaychain::kusama_test_net::*;
 use crate::setup::*;
 
 use frame_support::assert_ok;
-
-use karura_runtime::AssetRegistry;
-use module_asset_registry::AssetMetadata;
 use orml_traits::MultiCurrency;
 use xcm_emulator::TestExt;
 
