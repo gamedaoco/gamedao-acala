@@ -123,6 +123,8 @@ runtime-common = { path = "../common", default-features = false }
 
 module-evm-rpc-runtime-api = { path = "../../modules/evm/rpc/runtime_api",  default-features = false }
 
+pallet-sense = { path = "../../modules/sense", default-features = false }
+
 ecosystem-renvm-bridge = { path = "../../ecosystem-modules/ren/renvm-bridge", default-features = false }
 ecosystem-starport = { path = "../../ecosystem-modules/starport", default-features = false }
 ecosystem-compound-cash = { path = "../../ecosystem-modules/compound-cash", default-features = false }
@@ -254,6 +256,8 @@ std = [
 
 	"module-evm-rpc-runtime-api/std",
 
+	"pallet-sense/std",
+
 	"ecosystem-renvm-bridge/std",
 	"ecosystem-starport/std",
 	"ecosystem-compound-cash/std",
@@ -352,6 +356,8 @@ try-runtime = [
 	"module-homa-xcm/try-runtime",
 	"module-nominees-election/try-runtime",
 	"module-session-manager/try-runtime",
+
+	"pallet-sense/try-runtime",
 
 	"ecosystem-renvm-bridge/try-runtime",
 	"ecosystem-starport/try-runtime",
