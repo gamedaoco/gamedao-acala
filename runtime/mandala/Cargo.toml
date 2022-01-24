@@ -123,7 +123,7 @@ runtime-common = { path = "../common", default-features = false }
 
 module-evm-rpc-runtime-api = { path = "../../modules/evm/rpc/runtime_api",  default-features = false }
 
-pallet-sense = { path = "../../modules/sense", default-features = false }
+pallet-sense = { path = "../../gamedao/sense", default-features = false }
 
 ecosystem-renvm-bridge = { path = "../../ecosystem-modules/ren/renvm-bridge", default-features = false }
 ecosystem-starport = { path = "../../ecosystem-modules/starport", default-features = false }
