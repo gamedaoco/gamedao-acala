@@ -28,7 +28,7 @@ use module_evm_accounts::EvmAddressMapping;
 use module_support::{mocks::MockAddressMapping, DispatchableTask};
 use orml_traits::parameter_type_with_key;
 use primitives::{
-	convert_decimals_to_evm, define_combined_task, task::TaskResult, Amount, BlockNumber, CurrencyId,
+	define_combined_task, evm::convert_decimals_to_evm, task::TaskResult, Amount, BlockNumber, CurrencyId,
 	ReserveIdentifier, TokenSymbol,
 };
 use scale_info::TypeInfo;
@@ -209,7 +209,8 @@ impl module_evm::Config for TestRuntime {
 	type TxFeePerGas = TxFeePerGas;
 
 	type Event = Event;
-	type Precompiles = ();
+	type PrecompilesType = ();
+	type PrecompilesValue = ();
 	type ChainId = ChainId;
 	type GasToWeight = GasToWeight;
 	type ChargeTransactionPayment = ();

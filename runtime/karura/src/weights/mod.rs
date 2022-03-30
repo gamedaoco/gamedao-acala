@@ -32,6 +32,7 @@ pub mod module_evm;
 pub mod module_evm_accounts;
 pub mod module_homa;
 pub mod module_honzon;
+pub mod module_honzon_bridge;
 pub mod module_incentives;
 pub mod module_nft;
 pub mod module_prices;
@@ -44,3 +45,5 @@ pub mod orml_authority;
 pub mod orml_oracle;
 pub mod orml_tokens;
 pub mod orml_vesting;
+
+pub mod nutsfinance_stable_asset;

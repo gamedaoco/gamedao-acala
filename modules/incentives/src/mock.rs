@@ -151,6 +151,10 @@ impl CDPTreasury<AccountId> for MockCDPTreasury {
 		unimplemented!()
 	}
 
+	fn withdraw_surplus(_: &AccountId, _: Balance) -> DispatchResult {
+		unimplemented!()
+	}
+
 	fn deposit_collateral(_: &AccountId, _: CurrencyId, _: Balance) -> DispatchResult {
 		unimplemented!()
 	}
@@ -205,7 +209,7 @@ impl DEXManager<AccountId, CurrencyId, Balance> for MockDEX {
 		_: Balance,
 		_: Balance,
 		_: bool,
-	) -> DispatchResult {
+	) -> sp_std::result::Result<(Balance, Balance, Balance), DispatchError> {
 		unimplemented!()
 	}
 
@@ -217,7 +221,7 @@ impl DEXManager<AccountId, CurrencyId, Balance> for MockDEX {
 		_: Balance,
 		_: Balance,
 		_: bool,
-	) -> DispatchResult {
+	) -> sp_std::result::Result<(Balance, Balance), DispatchError> {
 		unimplemented!()
 	}
 }
@@ -248,11 +252,13 @@ impl orml_rewards::Config for Runtime {
 parameter_types! {
 	pub const AccumulatePeriod: BlockNumber = 10;
 	pub const StableCurrencyId: CurrencyId = AUSD;
+	pub const GetNativeCurrencyId: CurrencyId = ACA;
 	pub const IncentivesPalletId: PalletId = PalletId(*b"aca/inct");
 }
 
 ord_parameter_types! {
 	pub const Root: AccountId = ROOT::get();
+	pub const EarnShareBooster: Permill = Permill::from_percent(50);
 }
 
 impl Config for Runtime {
@@ -260,6 +266,8 @@ impl Config for Runtime {
 	type RewardsSource = RewardsSource;
 	type AccumulatePeriod = AccumulatePeriod;
 	type StableCurrencyId = StableCurrencyId;
+	type NativeCurrencyId = GetNativeCurrencyId;
+	type EarnShareBooster = EarnShareBooster;
 	type UpdateOrigin = EnsureSignedBy<ROOT, AccountId>;
 	type CDPTreasury = MockCDPTreasury;
 	type Currency = TokensModule;

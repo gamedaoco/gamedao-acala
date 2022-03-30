@@ -409,6 +409,270 @@ fn end_provisioning_trading_work() {
 }
 
 #[test]
+fn abort_provisioning_work() {
+	ExtBuilder::default().build().execute_with(|| {
+		System::set_block_number(1);
+
+		assert_noop!(
+			DexModule::abort_provisioning(Origin::signed(ALICE), AUSD, DOT),
+			Error::<Runtime>::MustBeProvisioning
+		);
+
+		assert_ok!(DexModule::list_provisioning(
+			Origin::signed(ListingOrigin::get()),
+			AUSD,
+			DOT,
+			1_000_000_000_000u128,
+			1_000_000_000_000u128,
+			5_000_000_000_000u128,
+			2_000_000_000_000u128,
+			1000,
+		));
+		assert_ok!(DexModule::list_provisioning(
+			Origin::signed(ListingOrigin::get()),
+			AUSD,
+			BTC,
+			1_000_000_000_000u128,
+			1_000_000_000_000u128,
+			5_000_000_000_000u128,
+			2_000_000_000_000u128,
+			1000,
+		));
+
+		assert_ok!(DexModule::add_provision(
+			Origin::signed(ALICE),
+			AUSD,
+			DOT,
+			1_000_000_000_000u128,
+			1_000_000_000_000u128
+		));
+		assert_ok!(DexModule::add_provision(
+			Origin::signed(BOB),
+			AUSD,
+			BTC,
+			5_000_000_000_000u128,
+			2_000_000_000_000u128,
+		));
+
+		// not expired, nothing happened.
+		System::set_block_number(2000);
+		assert_ok!(DexModule::abort_provisioning(Origin::signed(ALICE), AUSD, DOT));
+		assert_ok!(DexModule::abort_provisioning(Origin::signed(ALICE), AUSD, BTC));
+		assert_eq!(
+			DexModule::trading_pair_statuses(AUSDDOTPair::get()),
+			TradingPairStatus::<_, _>::Provisioning(ProvisioningParameters {
+				min_contribution: (1_000_000_000_000u128, 1_000_000_000_000u128),
+				target_provision: (5_000_000_000_000u128, 2_000_000_000_000u128),
+				accumulated_provision: (1_000_000_000_000u128, 1_000_000_000_000u128),
+				not_before: 1000,
+			})
+		);
+		assert_eq!(
+			DexModule::initial_share_exchange_rates(AUSDDOTPair::get()),
+			Default::default()
+		);
+		assert_eq!(
+			DexModule::trading_pair_statuses(AUSDBTCPair::get()),
+			TradingPairStatus::<_, _>::Provisioning(ProvisioningParameters {
+				min_contribution: (1_000_000_000_000u128, 1_000_000_000_000u128),
+				target_provision: (5_000_000_000_000u128, 2_000_000_000_000u128),
+				accumulated_provision: (5_000_000_000_000u128, 2_000_000_000_000u128),
+				not_before: 1000,
+			})
+		);
+		assert_eq!(
+			DexModule::initial_share_exchange_rates(AUSDBTCPair::get()),
+			Default::default()
+		);
+
+		// both expired, the provision for AUSD-DOT could be aborted, the provision for AUSD-BTC
+		// couldn't be aborted because it's already met the target.
+		System::set_block_number(3001);
+		assert_ok!(DexModule::abort_provisioning(Origin::signed(ALICE), AUSD, DOT));
+		System::assert_last_event(Event::DexModule(crate::Event::ProvisioningAborted {
+			trading_pair: AUSDDOTPair::get(),
+			accumulated_provision_0: 1_000_000_000_000u128,
+			accumulated_provision_1: 1_000_000_000_000u128,
+		}));
+
+		assert_ok!(DexModule::abort_provisioning(Origin::signed(ALICE), AUSD, BTC));
+		assert_eq!(
+			DexModule::trading_pair_statuses(AUSDDOTPair::get()),
+			TradingPairStatus::<_, _>::Disabled
+		);
+		assert_eq!(
+			DexModule::initial_share_exchange_rates(AUSDDOTPair::get()),
+			Default::default()
+		);
+		assert_eq!(
+			DexModule::trading_pair_statuses(AUSDBTCPair::get()),
+			TradingPairStatus::<_, _>::Provisioning(ProvisioningParameters {
+				min_contribution: (1_000_000_000_000u128, 1_000_000_000_000u128),
+				target_provision: (5_000_000_000_000u128, 2_000_000_000_000u128),
+				accumulated_provision: (5_000_000_000_000u128, 2_000_000_000_000u128),
+				not_before: 1000,
+			})
+		);
+		assert_eq!(
+			DexModule::initial_share_exchange_rates(AUSDBTCPair::get()),
+			Default::default()
+		);
+	});
+}
+
+#[test]
+fn refund_provision_work() {
+	ExtBuilder::default().build().execute_with(|| {
+		System::set_block_number(1);
+
+		assert_ok!(DexModule::list_provisioning(
+			Origin::signed(ListingOrigin::get()),
+			AUSD,
+			DOT,
+			1_000_000_000_000_000u128,
+			1_000_000_000_000_000u128,
+			5_000_000_000_000_000_000u128,
+			4_000_000_000_000_000_000u128,
+			1000,
+		));
+		assert_ok!(DexModule::list_provisioning(
+			Origin::signed(ListingOrigin::get()),
+			AUSD,
+			BTC,
+			1_000_000_000_000_000u128,
+			1_000_000_000_000_000u128,
+			100_000_000_000_000_000u128,
+			100_000_000_000_000_000u128,
+			1000,
+		));
+
+		assert_ok!(DexModule::add_provision(
+			Origin::signed(ALICE),
+			AUSD,
+			DOT,
+			1_000_000_000_000_000_000u128,
+			1_000_000_000_000_000_000u128
+		));
+		assert_ok!(DexModule::add_provision(
+			Origin::signed(BOB),
+			AUSD,
+			DOT,
+			0,
+			600_000_000_000_000_000u128,
+		));
+		assert_ok!(DexModule::add_provision(
+			Origin::signed(BOB),
+			AUSD,
+			BTC,
+			100_000_000_000_000_000u128,
+			100_000_000_000_000_000u128,
+		));
+
+		assert_noop!(
+			DexModule::refund_provision(Origin::signed(ALICE), ALICE, AUSD, DOT),
+			Error::<Runtime>::MustBeDisabled
+		);
+
+		// abort provisioning of AUSD-DOT
+		System::set_block_number(3001);
+		assert_ok!(DexModule::abort_provisioning(Origin::signed(ALICE), AUSD, DOT));
+		assert_eq!(
+			DexModule::trading_pair_statuses(AUSDDOTPair::get()),
+			TradingPairStatus::<_, _>::Disabled
+		);
+		assert_eq!(
+			DexModule::initial_share_exchange_rates(AUSDDOTPair::get()),
+			Default::default()
+		);
+
+		assert_eq!(
+			DexModule::provisioning_pool(AUSDDOTPair::get(), ALICE),
+			(1_000_000_000_000_000_000u128, 1_000_000_000_000_000_000u128)
+		);
+		assert_eq!(
+			DexModule::provisioning_pool(AUSDDOTPair::get(), BOB),
+			(0, 600_000_000_000_000_000u128)
+		);
+		assert_eq!(
+			Tokens::free_balance(AUSD, &DexModule::account_id()),
+			1_100_000_000_000_000_000u128
+		);
+		assert_eq!(
+			Tokens::free_balance(DOT, &DexModule::account_id()),
+			1_600_000_000_000_000_000u128
+		);
+		assert_eq!(Tokens::free_balance(AUSD, &ALICE), 0);
+		assert_eq!(Tokens::free_balance(DOT, &ALICE), 0);
+		assert_eq!(Tokens::free_balance(AUSD, &BOB), 900_000_000_000_000_000u128);
+		assert_eq!(Tokens::free_balance(DOT, &BOB), 400_000_000_000_000_000u128);
+
+		let alice_ref_count_0 = System::consumers(&ALICE);
+		let bob_ref_count_0 = System::consumers(&BOB);
+
+		assert_ok!(DexModule::refund_provision(Origin::signed(ALICE), ALICE, AUSD, DOT));
+		System::assert_last_event(Event::DexModule(crate::Event::RefundProvision {
+			who: ALICE,
+			currency_0: AUSD,
+			contribution_0: 1_000_000_000_000_000_000u128,
+			currency_1: DOT,
+			contribution_1: 1_000_000_000_000_000_000u128,
+		}));
+
+		assert_eq!(DexModule::provisioning_pool(AUSDDOTPair::get(), ALICE), (0, 0));
+		assert_eq!(
+			Tokens::free_balance(AUSD, &DexModule::account_id()),
+			100_000_000_000_000_000u128
+		);
+		assert_eq!(
+			Tokens::free_balance(DOT, &DexModule::account_id()),
+			600_000_000_000_000_000u128
+		);
+		assert_eq!(Tokens::free_balance(AUSD, &ALICE), 1_000_000_000_000_000_000u128);
+		assert_eq!(Tokens::free_balance(DOT, &ALICE), 1_000_000_000_000_000_000u128);
+		assert_eq!(System::consumers(&ALICE), alice_ref_count_0 - 1);
+
+		assert_ok!(DexModule::refund_provision(Origin::signed(ALICE), BOB, AUSD, DOT));
+		System::assert_last_event(Event::DexModule(crate::Event::RefundProvision {
+			who: BOB,
+			currency_0: AUSD,
+			contribution_0: 0,
+			currency_1: DOT,
+			contribution_1: 600_000_000_000_000_000u128,
+		}));
+
+		assert_eq!(DexModule::provisioning_pool(AUSDDOTPair::get(), BOB), (0, 0));
+		assert_eq!(
+			Tokens::free_balance(AUSD, &DexModule::account_id()),
+			100_000_000_000_000_000u128
+		);
+		assert_eq!(Tokens::free_balance(DOT, &DexModule::account_id()), 0);
+		assert_eq!(Tokens::free_balance(AUSD, &BOB), 900_000_000_000_000_000u128);
+		assert_eq!(Tokens::free_balance(DOT, &BOB), 1_000_000_000_000_000_000u128);
+		assert_eq!(System::consumers(&BOB), bob_ref_count_0 - 1);
+
+		// not allow refund if the provisioning has been ended before.
+		assert_ok!(DexModule::end_provisioning(Origin::signed(ALICE), AUSD, BTC));
+		assert_ok!(DexModule::disable_trading_pair(
+			Origin::signed(ListingOrigin::get()),
+			AUSD,
+			BTC
+		));
+		assert_eq!(
+			DexModule::trading_pair_statuses(AUSDBTCPair::get()),
+			TradingPairStatus::<_, _>::Disabled
+		);
+		assert_eq!(
+			DexModule::provisioning_pool(AUSDBTCPair::get(), BOB),
+			(100_000_000_000_000_000u128, 100_000_000_000_000_000u128)
+		);
+		assert_noop!(
+			DexModule::refund_provision(Origin::signed(BOB), BOB, AUSD, BTC),
+			Error::<Runtime>::NotAllowedRefund
+		);
+	});
+}
+
+#[test]
 fn disable_trading_pair_work() {
 	ExtBuilder::default().build().execute_with(|| {
 		System::set_block_number(1);
@@ -733,6 +997,14 @@ fn get_target_amounts_work() {
 				Error::<Runtime>::InvalidTradingPathLength,
 			);
 			assert_noop!(
+				DexModule::get_target_amounts(&[DOT, DOT], 10000),
+				Error::<Runtime>::InvalidTradingPath,
+			);
+			assert_noop!(
+				DexModule::get_target_amounts(&[DOT, AUSD, DOT], 10000),
+				Error::<Runtime>::InvalidTradingPath,
+			);
+			assert_noop!(
 				DexModule::get_target_amounts(&[DOT, AUSD, ACA], 10000),
 				Error::<Runtime>::MustBeEnabled,
 			);
@@ -796,6 +1068,14 @@ fn get_supply_amounts_work() {
 			assert_noop!(
 				DexModule::get_supply_amounts(&[DOT, AUSD, BTC, DOT], 10000),
 				Error::<Runtime>::InvalidTradingPathLength,
+			);
+			assert_noop!(
+				DexModule::get_supply_amounts(&[DOT, DOT], 10000),
+				Error::<Runtime>::InvalidTradingPath,
+			);
+			assert_noop!(
+				DexModule::get_supply_amounts(&[DOT, AUSD, DOT], 10000),
+				Error::<Runtime>::InvalidTradingPath,
 			);
 			assert_noop!(
 				DexModule::get_supply_amounts(&[DOT, AUSD, ACA], 10000),
@@ -1203,6 +1483,10 @@ fn do_swap_with_exact_supply_work() {
 				Error::<Runtime>::InvalidTradingPathLength,
 			);
 			assert_noop!(
+				DexModule::do_swap_with_exact_supply(&BOB, &[DOT, AUSD, DOT], 100_000_000_000_000, 0),
+				Error::<Runtime>::InvalidTradingPath,
+			);
+			assert_noop!(
 				DexModule::do_swap_with_exact_supply(&BOB, &[DOT, ACA], 100_000_000_000_000, 0),
 				Error::<Runtime>::MustBeEnabled,
 			);
@@ -1326,6 +1610,10 @@ fn do_swap_with_exact_target_work() {
 				Error::<Runtime>::InvalidTradingPathLength,
 			);
 			assert_noop!(
+				DexModule::do_swap_with_exact_target(&BOB, &[DOT, AUSD, DOT], 250_000_000_000_000, 200_000_000_000_000,),
+				Error::<Runtime>::InvalidTradingPath,
+			);
+			assert_noop!(
 				DexModule::do_swap_with_exact_target(&BOB, &[DOT, ACA], 250_000_000_000_000, 200_000_000_000_000),
 				Error::<Runtime>::MustBeEnabled,
 			);
@@ -1417,19 +1705,19 @@ fn get_swap_amount_work() {
 		.execute_with(|| {
 			LiquidityPool::<Runtime>::insert(AUSDDOTPair::get(), (50000, 10000));
 			assert_eq!(
-				DexModule::get_swap_amount(&vec![DOT, AUSD], SwapLimit::ExactSupply(10000, 0)),
+				DexModule::get_swap_amount(&[DOT, AUSD], SwapLimit::ExactSupply(10000, 0)),
 				Some((10000, 24874))
 			);
 			assert_eq!(
-				DexModule::get_swap_amount(&vec![DOT, AUSD], SwapLimit::ExactSupply(10000, 24875)),
+				DexModule::get_swap_amount(&[DOT, AUSD], SwapLimit::ExactSupply(10000, 24875)),
 				None
 			);
 			assert_eq!(
-				DexModule::get_swap_amount(&vec![DOT, AUSD], SwapLimit::ExactTarget(Balance::max_value(), 24874)),
+				DexModule::get_swap_amount(&[DOT, AUSD], SwapLimit::ExactTarget(Balance::max_value(), 24874)),
 				Some((10000, 24874))
 			);
 			assert_eq!(
-				DexModule::get_swap_amount(&vec![DOT, AUSD], SwapLimit::ExactTarget(9999, 24874)),
+				DexModule::get_swap_amount(&[DOT, AUSD], SwapLimit::ExactTarget(9999, 24874)),
 				None
 			);
 		});
@@ -1533,7 +1821,7 @@ fn swap_with_specific_path_work() {
 			assert_noop!(
 				DexModule::swap_with_specific_path(
 					&BOB,
-					&vec![DOT, AUSD],
+					&[DOT, AUSD],
 					SwapLimit::ExactSupply(100_000_000_000_000, 248_743_718_592_965)
 				),
 				Error::<Runtime>::InsufficientTargetAmount
@@ -1541,7 +1829,7 @@ fn swap_with_specific_path_work() {
 
 			assert_ok!(DexModule::swap_with_specific_path(
 				&BOB,
-				&vec![DOT, AUSD],
+				&[DOT, AUSD],
 				SwapLimit::ExactSupply(100_000_000_000_000, 200_000_000_000_000)
 			));
 			System::assert_last_event(Event::DexModule(crate::Event::Swap {
@@ -1553,7 +1841,7 @@ fn swap_with_specific_path_work() {
 			assert_noop!(
 				DexModule::swap_with_specific_path(
 					&BOB,
-					&vec![AUSD, DOT],
+					&[AUSD, DOT],
 					SwapLimit::ExactTarget(253_794_223_643_470, 100_000_000_000_000)
 				),
 				Error::<Runtime>::ExcessiveSupplyAmount
@@ -1561,7 +1849,7 @@ fn swap_with_specific_path_work() {
 
 			assert_ok!(DexModule::swap_with_specific_path(
 				&BOB,
-				&vec![AUSD, DOT],
+				&[AUSD, DOT],
 				SwapLimit::ExactTarget(300_000_000_000_000, 100_000_000_000_000)
 			));
 			System::assert_last_event(Event::DexModule(crate::Event::Swap {

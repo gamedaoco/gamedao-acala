@@ -22,14 +22,11 @@
 #![allow(clippy::unused_unit)]
 #![allow(clippy::upper_case_acronyms)]
 
-pub use crate::{
-	precompiles::{Precompile, PrecompileSet},
-	runner::{
-		stack::SubstrateStackState,
-		state::{StackExecutor, StackSubstateMetadata},
-		storage_meter::StorageMeter,
-		Runner,
-	},
+pub use crate::runner::{
+	stack::SubstrateStackState,
+	state::{PrecompileSet, StackExecutor, StackSubstateMetadata},
+	storage_meter::StorageMeter,
+	Runner,
 };
 use codec::{Decode, Encode, FullCodec, MaxEncodedLen};
 use frame_support::{
@@ -49,22 +46,21 @@ use frame_support::{
 };
 use frame_system::{ensure_root, ensure_signed, pallet_prelude::*, EnsureRoot, EnsureSigned};
 use hex_literal::hex;
-pub use module_evm_utiltity::{
-	ethereum::{Log, TransactionAction},
+pub use module_evm_utility::{
+	ethereum::{AccessListItem, Log, TransactionAction},
 	evm::{self, Config as EvmConfig, Context, ExitError, ExitFatal, ExitReason, ExitRevert, ExitSucceed},
 	Account,
 };
 pub use module_support::{
-	AddressMapping, DispatchableTask, EVMStateRentTrait, ExecutionMode, IdleScheduler, InvokeContext,
-	TransactionPayment, EVM as EVMTrait,
+	AddressMapping, DispatchableTask, EVMManager, ExecutionMode, IdleScheduler, InvokeContext, TransactionPayment,
+	EVM as EVMTrait,
 };
 pub use orml_traits::{currency::TransferAll, MultiCurrency};
 use primitive_types::{H160, H256, U256};
 pub use primitives::{
-	convert_decimals_from_evm, convert_decimals_to_evm,
 	evm::{
-		CallInfo, CreateInfo, EvmAddress, ExecutionInfo, Vicinity, MIRRORED_NFT_ADDRESS_START,
-		MIRRORED_TOKENS_ADDRESS_START, PREDEPLOY_ADDRESS_START,
+		convert_decimals_from_evm, convert_decimals_to_evm, CallInfo, CreateInfo, EvmAddress, ExecutionInfo, Vicinity,
+		MIRRORED_NFT_ADDRESS_START, MIRRORED_TOKENS_ADDRESS_START,
 	},
 	task::TaskResult,
 	Balance, CurrencyId, ReserveIdentifier,
@@ -79,13 +75,7 @@ use sp_runtime::{
 	transaction_validity::TransactionValidityError,
 	Either, TransactionOutcome,
 };
-use sp_std::{
-	cmp,
-	collections::btree_map::BTreeMap,
-	fmt::{Debug, Write},
-	marker::PhantomData,
-	prelude::*,
-};
+use sp_std::{cmp, collections::btree_map::BTreeMap, fmt::Debug, marker::PhantomData, prelude::*};
 
 pub mod precompiles;
 pub mod runner;
@@ -109,55 +99,19 @@ pub type NegativeImbalanceOf<T> =
 pub const RESERVE_ID_STORAGE_DEPOSIT: ReserveIdentifier = ReserveIdentifier::EvmStorageDeposit;
 pub const RESERVE_ID_DEVELOPER_DEPOSIT: ReserveIdentifier = ReserveIdentifier::EvmDeveloperDeposit;
 
-// Initially based on Istanbul hard fork configuration.
+// Initially based on London hard fork configuration.
 static ACALA_CONFIG: EvmConfig = EvmConfig {
-	gas_ext_code: 700,
-	gas_ext_code_hash: 700,
-	gas_balance: 700,
-	gas_sload: 800,
-	gas_sload_cold: 0,
-	gas_sstore_set: 20000,
-	gas_sstore_reset: 5000,
-	refund_sstore_clears: 0, // no gas refund
-	gas_suicide: 5000,
-	gas_suicide_new_account: 25000,
-	gas_call: 700,
-	gas_expbyte: 50,
-	gas_transaction_create: 53000,
-	gas_transaction_call: 21000,
-	gas_transaction_zero_data: 4,
-	gas_transaction_non_zero_data: 16,
-	gas_access_list_address: 0,
-	gas_access_list_storage_key: 0,
-	gas_account_access_cold: 0,
-	gas_storage_read_warm: 0,
+	refund_sstore_clears: 0,            // no gas refund
 	sstore_gas_metering: false,         // no gas refund
 	sstore_revert_under_stipend: false, // ignored
-	increase_state_access_gas: false,
-	err_on_call_with_more_gas: false,
-	empty_considered_exists: false,
-	create_increase_nonce: true,
-	call_l64_after_gas: true,
-	stack_limit: 1024,
-	memory_limit: usize::max_value(),
-	call_stack_limit: 1024,
 	create_contract_limit: Some(MaxCodeSize::get() as usize),
-	call_stipend: 2300,
-	has_delegate_call: true,
-	has_create2: true,
-	has_revert: true,
-	has_return_data: true,
-	has_bitwise_shifting: true,
-	has_chain_id: true,
-	has_self_balance: true,
-	has_ext_code_hash: true,
-	estimate: false,
+	..module_evm_utility::evm::Config::london()
 };
 
 /// Create an empty contract `contract Empty { }`.
 pub const BASE_CREATE_GAS: u64 = 67_066;
 /// Call function that just set a storage `function store(uint256 num) public { number = num; }`.
-pub const BASE_CALL_GAS: u64 = 41_602;
+pub const BASE_CALL_GAS: u64 = 43_702;
 
 /// Helper method to calculate `create` weight.
 fn create_weight<T: Config>(gas: u64) -> Weight {
@@ -215,8 +169,11 @@ pub mod module {
 		type AddressMapping: AddressMapping<Self::AccountId>;
 
 		/// Currency type for withdraw and balance storage.
-		type Currency: Currency<Self::AccountId, Balance = Balance>
-			+ NamedReservableCurrency<Self::AccountId, ReserveIdentifier = ReserveIdentifier>;
+		type Currency: NamedReservableCurrency<
+			Self::AccountId,
+			ReserveIdentifier = ReserveIdentifier,
+			Balance = Balance,
+		>;
 
 		/// Merge free balance from source to dest.
 		type TransferAll: TransferAll<Self::AccountId>;
@@ -239,7 +196,8 @@ pub mod module {
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 
 		/// Precompiles associated with this EVM engine.
-		type Precompiles: PrecompileSet;
+		type PrecompilesType: PrecompileSet;
+		type PrecompilesValue: Get<Self::PrecompilesType>;
 
 		/// Chain ID of EVM.
 		#[pallet::constant]
@@ -447,7 +405,7 @@ pub mod module {
 					};
 					let metadata = StackSubstateMetadata::new(210_000, 1000, T::config());
 					let state = SubstrateStackState::<T>::new(&vicinity, metadata);
-					let mut executor = StackExecutor::new(state, T::config());
+					let mut executor = StackExecutor::new_with_precompiles(state, T::config(), &());
 
 					let mut runtime =
 						evm::Runtime::new(Rc::new(account.code.clone()), Rc::new(Vec::new()), context, T::config());
@@ -483,6 +441,8 @@ pub mod module {
 			from: EvmAddress,
 			contract: EvmAddress,
 			logs: Vec<Log>,
+			used_gas: u64,
+			used_storage: i32,
 		},
 		/// A contract was attempted to be created, but the execution failed.
 		CreatedFailed {
@@ -490,12 +450,16 @@ pub mod module {
 			contract: EvmAddress,
 			exit_reason: ExitReason,
 			logs: Vec<Log>,
+			used_gas: u64,
+			used_storage: i32,
 		},
 		/// A contract has been executed successfully with states applied.
 		Executed {
 			from: EvmAddress,
 			contract: EvmAddress,
 			logs: Vec<Log>,
+			used_gas: u64,
+			used_storage: i32,
 		},
 		/// A contract has been executed with errors. States are reverted with
 		/// only gas fees applied.
@@ -505,6 +469,8 @@ pub mod module {
 			exit_reason: ExitReason,
 			output: Vec<u8>,
 			logs: Vec<Log>,
+			used_gas: u64,
+			used_storage: i32,
 		},
 		/// Transferred maintainer.
 		TransferredMaintainer {
@@ -582,11 +548,14 @@ pub mod module {
 			#[pallet::compact] value: BalanceOf<T>,
 			#[pallet::compact] gas_limit: u64,
 			#[pallet::compact] storage_limit: u32,
+			access_list: Vec<AccessListItem>,
 			#[pallet::compact] _valid_until: T::BlockNumber, // checked by tx validation logic
 		) -> DispatchResultWithPostInfo {
 			match action {
-				TransactionAction::Call(target) => Self::call(origin, target, input, value, gas_limit, storage_limit),
-				TransactionAction::Create => Self::create(origin, input, value, gas_limit, storage_limit),
+				TransactionAction::Call(target) => {
+					Self::call(origin, target, input, value, gas_limit, storage_limit, access_list)
+				}
+				TransactionAction::Create => Self::create(origin, input, value, gas_limit, storage_limit, access_list),
 			}
 		}
 
@@ -607,6 +576,7 @@ pub mod module {
 			#[pallet::compact] value: BalanceOf<T>,
 			#[pallet::compact] gas_limit: u64,
 			#[pallet::compact] storage_limit: u32,
+			access_list: Vec<AccessListItem>,
 		) -> DispatchResultWithPostInfo {
 			let who = ensure_signed(origin)?;
 			let source = T::AddressMapping::get_or_create_evm_address(&who);
@@ -619,6 +589,7 @@ pub mod module {
 				value,
 				gas_limit,
 				storage_limit,
+				access_list.into_iter().map(|v| (v.address, v.storage_keys)).collect(),
 				T::config(),
 			) {
 				Err(e) => {
@@ -628,16 +599,22 @@ pub mod module {
 						exit_reason: ExitReason::Error(ExitError::Other(Into::<&str>::into(e).into())),
 						output: vec![],
 						logs: vec![],
+						used_gas: gas_limit,
+						used_storage: Default::default(),
 					});
 
 					Ok(().into())
 				}
 				Ok(info) => {
+					let used_gas: u64 = info.used_gas.unique_saturated_into();
+
 					if info.exit_reason.is_succeed() {
 						Pallet::<T>::deposit_event(Event::<T>::Executed {
 							from: source,
 							contract: target,
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: info.used_storage,
 						});
 					} else {
 						Pallet::<T>::deposit_event(Event::<T>::ExecutedFailed {
@@ -645,11 +622,11 @@ pub mod module {
 							contract: target,
 							exit_reason: info.exit_reason.clone(),
 							output: info.value.clone(),
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: Default::default(),
 						});
 					}
-
-					let used_gas: u64 = info.used_gas.unique_saturated_into();
 
 					Ok(PostDispatchInfo {
 						actual_weight: Some(call_weight::<T>(used_gas)),
@@ -679,6 +656,7 @@ pub mod module {
 			#[pallet::compact] value: BalanceOf<T>,
 			#[pallet::compact] gas_limit: u64,
 			#[pallet::compact] storage_limit: u32,
+			access_list: Vec<AccessListItem>,
 		) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
 
@@ -693,7 +671,17 @@ pub mod module {
 				_payed = imbalance;
 			}
 
-			match T::Runner::call(from, from, target, input, value, gas_limit, storage_limit, T::config()) {
+			match T::Runner::call(
+				from,
+				from,
+				target,
+				input,
+				value,
+				gas_limit,
+				storage_limit,
+				access_list.into_iter().map(|v| (v.address, v.storage_keys)).collect(),
+				T::config(),
+			) {
 				Err(e) => {
 					Pallet::<T>::deposit_event(Event::<T>::ExecutedFailed {
 						from,
@@ -701,16 +689,22 @@ pub mod module {
 						exit_reason: ExitReason::Error(ExitError::Other(Into::<&str>::into(e).into())),
 						output: vec![],
 						logs: vec![],
+						used_gas: gas_limit,
+						used_storage: Default::default(),
 					});
 
 					Ok(().into())
 				}
 				Ok(info) => {
+					let used_gas: u64 = info.used_gas.unique_saturated_into();
+
 					if info.exit_reason.is_succeed() {
 						Pallet::<T>::deposit_event(Event::<T>::Executed {
 							from,
 							contract: target,
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: info.used_storage,
 						});
 					} else {
 						Pallet::<T>::deposit_event(Event::<T>::ExecutedFailed {
@@ -718,11 +712,11 @@ pub mod module {
 							contract: target,
 							exit_reason: info.exit_reason.clone(),
 							output: info.value.clone(),
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: Default::default(),
 						});
 					}
-
-					let used_gas: u64 = info.used_gas.unique_saturated_into();
 
 					#[cfg(not(feature = "with-ethereum-compatibility"))]
 					{
@@ -751,7 +745,7 @@ pub mod module {
 		/// Issue an EVM create operation. This is similar to a contract
 		/// creation transaction in Ethereum.
 		///
-		/// - `init`: the data supplied for the contract's constructor
+		/// - `input`: the data supplied for the contract's constructor
 		/// - `value`: the amount sent to the contract upon creation
 		/// - `gas_limit`: the maximum gas the call can use
 		/// - `storage_limit`: the total bytes the contract's storage can increase by
@@ -759,42 +753,57 @@ pub mod module {
 		#[transactional]
 		pub fn create(
 			origin: OriginFor<T>,
-			init: Vec<u8>,
+			input: Vec<u8>,
 			#[pallet::compact] value: BalanceOf<T>,
 			#[pallet::compact] gas_limit: u64,
 			#[pallet::compact] storage_limit: u32,
+			access_list: Vec<AccessListItem>,
 		) -> DispatchResultWithPostInfo {
 			let who = ensure_signed(origin)?;
 			let source = T::AddressMapping::get_or_create_evm_address(&who);
 
-			match T::Runner::create(source, init, value, gas_limit, storage_limit, T::config()) {
+			match T::Runner::create(
+				source,
+				input,
+				value,
+				gas_limit,
+				storage_limit,
+				access_list.into_iter().map(|v| (v.address, v.storage_keys)).collect(),
+				T::config(),
+			) {
 				Err(e) => {
 					Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 						from: source,
 						contract: H160::default(),
 						exit_reason: ExitReason::Error(ExitError::Other(Into::<&str>::into(e).into())),
 						logs: vec![],
+						used_gas: gas_limit,
+						used_storage: Default::default(),
 					});
 
 					Ok(().into())
 				}
 				Ok(info) => {
+					let used_gas: u64 = info.used_gas.unique_saturated_into();
+
 					if info.exit_reason.is_succeed() {
 						Pallet::<T>::deposit_event(Event::<T>::Created {
 							from: source,
 							contract: info.value,
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: info.used_storage,
 						});
 					} else {
 						Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 							from: source,
 							contract: info.value,
 							exit_reason: info.exit_reason.clone(),
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: Default::default(),
 						});
 					}
-
-					let used_gas: u64 = info.used_gas.unique_saturated_into();
 
 					Ok(PostDispatchInfo {
 						actual_weight: Some(create_weight::<T>(used_gas)),
@@ -807,7 +816,7 @@ pub mod module {
 		/// Issue an EVM create2 operation.
 		///
 		/// - `target`: the contract address to call
-		/// - `init`: the data supplied for the contract's constructor
+		/// - `input`: the data supplied for the contract's constructor
 		/// - `salt`: used for generating the new contract's address
 		/// - `value`: the amount sent for payable calls
 		/// - `gas_limit`: the maximum gas the call can use
@@ -816,43 +825,59 @@ pub mod module {
 		#[transactional]
 		pub fn create2(
 			origin: OriginFor<T>,
-			init: Vec<u8>,
+			input: Vec<u8>,
 			salt: H256,
 			#[pallet::compact] value: BalanceOf<T>,
 			#[pallet::compact] gas_limit: u64,
 			#[pallet::compact] storage_limit: u32,
+			access_list: Vec<AccessListItem>,
 		) -> DispatchResultWithPostInfo {
 			let who = ensure_signed(origin)?;
 			let source = T::AddressMapping::get_or_create_evm_address(&who);
 
-			match T::Runner::create2(source, init, salt, value, gas_limit, storage_limit, T::config()) {
+			match T::Runner::create2(
+				source,
+				input,
+				salt,
+				value,
+				gas_limit,
+				storage_limit,
+				access_list.into_iter().map(|v| (v.address, v.storage_keys)).collect(),
+				T::config(),
+			) {
 				Err(e) => {
 					Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 						from: source,
 						contract: H160::default(),
 						exit_reason: ExitReason::Error(ExitError::Other(Into::<&str>::into(e).into())),
 						logs: vec![],
+						used_gas: gas_limit,
+						used_storage: Default::default(),
 					});
 
 					Ok(().into())
 				}
 				Ok(info) => {
+					let used_gas: u64 = info.used_gas.unique_saturated_into();
+
 					if info.exit_reason.is_succeed() {
 						Pallet::<T>::deposit_event(Event::<T>::Created {
 							from: source,
 							contract: info.value,
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: info.used_storage,
 						});
 					} else {
 						Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 							from: source,
 							contract: info.value,
 							exit_reason: info.exit_reason.clone(),
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: Default::default(),
 						});
 					}
-
-					let used_gas: u64 = info.used_gas.unique_saturated_into();
 
 					Ok(PostDispatchInfo {
 						actual_weight: Some(create2_weight::<T>(used_gas)),
@@ -865,7 +890,7 @@ pub mod module {
 		/// Create mirrored NFT contract. The next available system contract
 		/// address will be used as created contract address.
 		///
-		/// - `init`: the data supplied for the contract's constructor
+		/// - `input`: the data supplied for the contract's constructor
 		/// - `value`: the amount sent for payable calls
 		/// - `gas_limit`: the maximum gas the call can use
 		/// - `storage_limit`: the total bytes the contract's storage can increase by
@@ -873,10 +898,11 @@ pub mod module {
 		#[transactional]
 		pub fn create_nft_contract(
 			origin: OriginFor<T>,
-			init: Vec<u8>,
+			input: Vec<u8>,
 			#[pallet::compact] value: BalanceOf<T>,
 			#[pallet::compact] gas_limit: u64,
 			#[pallet::compact] storage_limit: u32,
+			access_list: Vec<AccessListItem>,
 		) -> DispatchResultWithPostInfo {
 			T::NetworkContractOrigin::ensure_origin(origin)?;
 
@@ -895,36 +921,51 @@ pub mod module {
 				)?;
 			}
 
-			match T::Runner::create_at_address(source, address, init, value, gas_limit, storage_limit, T::config()) {
+			match T::Runner::create_at_address(
+				source,
+				address,
+				input,
+				value,
+				gas_limit,
+				storage_limit,
+				access_list.into_iter().map(|v| (v.address, v.storage_keys)).collect(),
+				T::config(),
+			) {
 				Err(e) => {
 					Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 						from: source,
 						contract: H160::default(),
 						exit_reason: ExitReason::Error(ExitError::Other(Into::<&str>::into(e).into())),
 						logs: vec![],
+						used_gas: gas_limit,
+						used_storage: Default::default(),
 					});
 
 					Ok(().into())
 				}
 				Ok(info) => {
+					let used_gas: u64 = info.used_gas.unique_saturated_into();
+
 					if info.exit_reason.is_succeed() {
 						NetworkContractIndex::<T>::mutate(|v| *v = v.saturating_add(One::one()));
 
 						Pallet::<T>::deposit_event(Event::<T>::Created {
 							from: source,
 							contract: info.value,
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: info.used_storage,
 						});
 					} else {
 						Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 							from: source,
 							contract: info.value,
 							exit_reason: info.exit_reason.clone(),
-							logs: info.logs.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: Default::default(),
 						});
 					}
-
-					let used_gas: u64 = info.used_gas.unique_saturated_into();
 
 					Ok(PostDispatchInfo {
 						actual_weight: Some(create_nft_contract::<T>(used_gas)),
@@ -938,23 +979,20 @@ pub mod module {
 		/// will be used as created contract address.
 		///
 		/// - `target`: the address specified by the contract
-		/// - `init`: the data supplied for the contract's constructor
+		/// - `input`: the data supplied for the contract's constructor
 		/// - `value`: the amount sent for payable calls
 		/// - `gas_limit`: the maximum gas the call can use
 		/// - `storage_limit`: the total bytes the contract's storage can increase by
-		#[pallet::weight(if init.is_empty() {
-			<T as Config>::WeightInfo::create_predeploy_mirror_token_contract()
-		} else {
-			create_predeploy_contract::<T>(*gas_limit)
-		})]
+		#[pallet::weight(create_predeploy_contract::<T>(*gas_limit))]
 		#[transactional]
 		pub fn create_predeploy_contract(
 			origin: OriginFor<T>,
 			target: EvmAddress,
-			init: Vec<u8>,
+			input: Vec<u8>,
 			#[pallet::compact] value: BalanceOf<T>,
 			#[pallet::compact] gas_limit: u64,
 			#[pallet::compact] storage_limit: u32,
+			access_list: Vec<AccessListItem>,
 		) -> DispatchResultWithPostInfo {
 			T::NetworkContractOrigin::ensure_origin(origin)?;
 
@@ -976,65 +1014,54 @@ pub mod module {
 				)?;
 			}
 
-			if init.is_empty() {
-				// This is mirror token, get the code of token predeployed contract.
-				let code = Self::code_at_address(&PREDEPLOY_ADDRESS_START);
-				ensure!(!code.is_empty(), Error::<T>::ContractNotFound);
+			match T::Runner::create_at_address(
+				source,
+				target,
+				input,
+				value,
+				gas_limit,
+				storage_limit,
+				access_list.into_iter().map(|v| (v.address, v.storage_keys)).collect(),
+				T::config(),
+			) {
+				Err(e) => {
+					Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
+						from: source,
+						contract: H160::default(),
+						exit_reason: ExitReason::Error(ExitError::Other(Into::<&str>::into(e).into())),
+						logs: vec![],
+						used_gas: gas_limit,
+						used_storage: Default::default(),
+					});
 
-				// deposit ED for mirrored token
-				T::Currency::transfer(
-					&T::TreasuryAccount::get(),
-					&T::AddressMapping::get_account_id(&target),
-					<T::Currency as Currency<T::AccountId>>::minimum_balance(),
-					ExistenceRequirement::AllowDeath,
-				)?;
+					Ok(().into())
+				}
+				Ok(info) => {
+					let used_gas: u64 = info.used_gas.unique_saturated_into();
 
-				<Pallet<T>>::create_contract(source, target, code.to_vec());
-				Pallet::<T>::deposit_event(Event::<T>::Created {
-					from: source,
-					contract: target,
-					logs: vec![],
-				});
-
-				Ok(PostDispatchInfo {
-					actual_weight: Some(<T as Config>::WeightInfo::create_predeploy_mirror_token_contract()),
-					pays_fee: Pays::No,
-				})
-			} else {
-				match T::Runner::create_at_address(source, target, init, value, gas_limit, storage_limit, T::config()) {
-					Err(e) => {
+					if info.exit_reason.is_succeed() {
+						Pallet::<T>::deposit_event(Event::<T>::Created {
+							from: source,
+							contract: info.value,
+							logs: info.logs,
+							used_gas,
+							used_storage: info.used_storage,
+						});
+					} else {
 						Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 							from: source,
-							contract: H160::default(),
-							exit_reason: ExitReason::Error(ExitError::Other(Into::<&str>::into(e).into())),
-							logs: vec![],
+							contract: info.value,
+							exit_reason: info.exit_reason.clone(),
+							logs: info.logs,
+							used_gas,
+							used_storage: Default::default(),
 						});
-
-						Ok(().into())
 					}
-					Ok(info) => {
-						if info.exit_reason.is_succeed() {
-							Pallet::<T>::deposit_event(Event::<T>::Created {
-								from: source,
-								contract: info.value,
-								logs: info.logs.clone(),
-							});
-						} else {
-							Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
-								from: source,
-								contract: info.value,
-								exit_reason: info.exit_reason.clone(),
-								logs: info.logs.clone(),
-							});
-						}
 
-						let used_gas: u64 = info.used_gas.unique_saturated_into();
-
-						Ok(PostDispatchInfo {
-							actual_weight: Some(create_predeploy_contract::<T>(used_gas)),
-							pays_fee: Pays::No,
-						})
-					}
+					Ok(PostDispatchInfo {
+						actual_weight: Some(create_predeploy_contract::<T>(used_gas)),
+						pays_fee: Pays::No,
+					})
 				}
 			}
 		}
@@ -1699,6 +1726,7 @@ impl<T: Config> EVMTrait<T::AccountId> for Pallet<T> {
 				value,
 				gas_limit,
 				storage_limit,
+				vec![],
 				&config,
 			);
 
@@ -1710,6 +1738,8 @@ impl<T: Config> EVMTrait<T::AccountId> for Pallet<T> {
 								from: context.sender,
 								contract: context.contract,
 								logs: info.logs.clone(),
+								used_gas: info.used_gas.unique_saturated_into(),
+								used_storage: info.used_storage,
 							});
 							TransactionOutcome::Commit(Ok(info))
 						} else {
@@ -1719,6 +1749,8 @@ impl<T: Config> EVMTrait<T::AccountId> for Pallet<T> {
 								exit_reason: info.exit_reason.clone(),
 								output: info.value.clone(),
 								logs: info.logs.clone(),
+								used_gas: info.used_gas.unique_saturated_into(),
+								used_storage: Default::default(),
 							});
 							TransactionOutcome::Rollback(Ok(info))
 						}
@@ -1741,7 +1773,7 @@ impl<T: Config> EVMTrait<T::AccountId> for Pallet<T> {
 	}
 }
 
-impl<T: Config> EVMStateRentTrait<T::AccountId, BalanceOf<T>> for Pallet<T> {
+impl<T: Config> EVMManager<T::AccountId, BalanceOf<T>> for Pallet<T> {
 	fn query_new_contract_extra_bytes() -> u32 {
 		T::NewContractExtraBytes::get()
 	}
@@ -1805,18 +1837,14 @@ pub fn code_hash(code: &[u8]) -> H256 {
 	H256::from_slice(Keccak256::digest(code).as_slice())
 }
 
-fn encode_revert_message(e: &ExitError) -> Vec<u8> {
+#[allow(dead_code)]
+fn encode_revert_message(msg: &[u8]) -> Vec<u8> {
 	// A minimum size of error function selector (4) + offset (32) + string length
 	// (32) should contain a utf-8 encoded revert reason.
-
-	let mut w = sp_std::Writer::default();
-	let _ = core::write!(&mut w, "{:?}", e);
-	let msg = w.into_inner();
-
 	let mut data = Vec::with_capacity(68 + msg.len());
 	data.extend_from_slice(&[0u8; 68]);
 	U256::from(msg.len()).to_big_endian(&mut data[36..68]);
-	data.extend_from_slice(&msg);
+	data.extend_from_slice(msg);
 	data
 }
 
