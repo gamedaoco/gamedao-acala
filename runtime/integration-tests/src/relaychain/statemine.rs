@@ -17,26 +17,22 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! Tests parachain to parachain xcm communication between Statemine and Karura.
+
 use crate::relaychain::kusama_test_net::*;
 use crate::setup::*;
 use cumulus_primitives_core::ParaId;
 
 use frame_support::assert_ok;
-use module_asset_registry::AssetMetadata;
 pub use orml_traits::GetByKey;
 use polkadot_parachain::primitives::Sibling;
+use primitives::currency::AssetMetadata;
 use xcm::v1::{Junction, MultiLocation};
 use xcm_emulator::TestExt;
 
 pub const UNIT: Balance = 1_000_000_000_000;
 pub const TEN: Balance = 10_000_000_000_000;
-pub const FEE_STATEMINE: Balance = 4_000_000_000;
-pub const FEE_KUSAMA: Balance = 106_666_660;
-
-// Statemine ED
-pub const EXISTENTIAL_DEPOSIT: Balance = CENTS / 10;
-pub const UNITS: Balance = 1_000_000_000_000;
-pub const CENTS: Balance = UNITS / 30_000;
+pub const FEE_WEIGHT: Balance = 4_000_000_000;
+pub const FEE_STATEMINE: Balance = 15_540_916;
 
 fn init_statemine_xcm_interface() {
 	let xcm_operation =
@@ -58,132 +54,91 @@ fn init_statemine_xcm_interface() {
 #[test]
 fn statemine_min_xcm_fee_matched() {
 	Statemine::execute_with(|| {
-		use frame_support::weights::{IdentityFee, WeightToFeePolynomial};
+		use frame_support::weights::{IdentityFee, WeightToFee};
 
 		init_statemine_xcm_interface();
-		let weight = FEE_STATEMINE as u64;
+		let weight = FEE_WEIGHT as u64;
 
-		let fee: Balance = IdentityFee::calc(&weight);
+		let fee: Balance = IdentityFee::weight_to_fee(&weight);
 		let statemine: MultiLocation = (1, Parachain(parachains::statemine::ID)).into();
 		let bifrost: MultiLocation = (1, Parachain(parachains::bifrost::ID)).into();
 
-		let statemine_fee: u128 = ParachainMinFee::get(&statemine);
+		let statemine_fee: u128 = ParachainMinFee::get(&statemine).unwrap();
 		assert_eq!(fee, statemine_fee);
 
-		let bifrost_fee: u128 = ParachainMinFee::get(&bifrost);
-		assert_eq!(u128::MAX, bifrost_fee);
+		let bifrost_fee: Option<u128> = ParachainMinFee::get(&bifrost);
+		assert_eq!(None, bifrost_fee);
 	});
 }
 
 #[test]
-fn user_different_ksm_fee() {
-	let para_2000: AccountId = Sibling::from(2000).into_account();
-	let child_2000: AccountId = ParaId::from(2000).into_account();
-	let child_1000: AccountId = ParaId::from(1000).into_account();
-	let user1_fees = vec![
-		2 * FEE_STATEMINE - 1,
-		2 * FEE_STATEMINE,
-		2 * FEE_STATEMINE + 1,
-		2 * FEE_STATEMINE + FEE_KUSAMA,
-	];
-	let min_user_fee1 = 2 * FEE_STATEMINE;
-	let para_init_amount1 = UNIT;
-
-	let user2_fees = vec![2 * FEE_STATEMINE + FEE_KUSAMA];
-	let min_user_fee2 = 2 * FEE_STATEMINE + FEE_KUSAMA;
-	let para_init_amount2 = FEE_STATEMINE + EXISTENTIAL_DEPOSIT;
-
-	let data1 = vec![
-		(user1_fees, min_user_fee1, para_init_amount1),
-		(user2_fees, min_user_fee2, para_init_amount2),
-	];
-
-	for (user_fees, min_user_fee, init_amount) in data1 {
-		for user_fee in user_fees {
-			TestNet::reset();
-
-			statemine_side(init_amount);
-
-			KusamaNet::execute_with(|| {
-				let _ = kusama_runtime::Balances::make_free_balance_be(&child_2000, UNIT);
-			});
-
-			// User fee amount split into two parts:
-			// First part is `FEE_STATEMINE` sent to statemine.
-			// Second part `user_fee` sent to kusama then route to statemine.
-			karura_side(user_fee + FEE_STATEMINE);
-
-			KusamaNet::execute_with(|| {
-				assert_eq!(UNIT - user_fee, kusama_runtime::Balances::free_balance(&child_2000));
-				assert_eq!(
-					user_fee - FEE_KUSAMA,
-					kusama_runtime::Balances::free_balance(&child_1000)
-				);
-			});
-
-			Statemine::execute_with(|| {
-				use statemine_runtime::*;
-				// Karura send back custom asset to Statemine, ensure recipient got custom asset
-				assert_eq!(UNIT, Assets::balance(0, &AccountId::from(BOB)));
-				// the recipient's ksm not changed
-				assert_eq!(UNIT, Balances::free_balance(&AccountId::from(BOB)));
-				// and withdraw sibling parachain sovereign account
-				assert_eq!(TEN - UNIT, Assets::balance(0, &para_2000));
-
-				if user_fee < min_user_fee {
-					assert_eq!(UNIT - FEE_STATEMINE, Balances::free_balance(&para_2000));
-				} else {
-					assert_eq!(
-						init_amount - FEE_STATEMINE + user_fee - (FEE_STATEMINE + FEE_KUSAMA),
-						Balances::free_balance(&para_2000)
-					);
+fn transfer_from_relay_chain() {
+	KusamaNet::execute_with(|| {
+		assert_ok!(kusama_runtime::XcmPallet::reserve_transfer_assets(
+			kusama_runtime::Origin::signed(ALICE.into()),
+			Box::new(Parachain(1000).into().into()),
+			Box::new(
+				Junction::AccountId32 {
+					id: BOB,
+					network: NetworkId::Any
 				}
-			});
-		}
-	}
+				.into()
+				.into()
+			),
+			Box::new((Here, dollar(KSM)).into()),
+			0
+		));
+	});
+
+	Statemine::execute_with(|| {
+		assert_eq!(
+			dollar(KSM) - FEE_STATEMINE,
+			Balances::free_balance(&AccountId::from(BOB))
+		);
+	});
 }
 
 #[test]
-fn user_large_fee_fund_to_sovereign_account_works() {
-	let para_2000: AccountId = Sibling::from(2000).into_account();
-	let child_2000: AccountId = ParaId::from(2000).into_account();
-	let child_1000: AccountId = ParaId::from(1000).into_account();
+fn karura_statemine_transfer_works() {
+	TestNet::reset();
+	let para_2000: AccountId = Sibling::from(2000).into_account_truncating();
+	let child_2000: AccountId = ParaId::from(2000).into_account_truncating();
+	let child_1000: AccountId = ParaId::from(1000).into_account_truncating();
 
-	let assets: Vec<(u128, u128, u128, u128)> = vec![
-		(9 * UNIT + FEE_STATEMINE, UNIT, 8_999_893_333_340, 9_991_893_333_340),
-		(UNIT, 9_004_000_000_000, 995_893_333_340, 1_987_893_333_340),
-	];
+	// minimum asset should be: FEE_WEIGHT+FEE_KUSAMA+max(KUSAMA_ED,STATEMINE_ED+FEE_STATEMINE).
+	// but due to current half fee, sender asset should at lease: FEE_WEIGHT + 2 * FEE_KUSAMA
+	let asset = FEE_WEIGHT + 2 * 31_488_122;
 
-	for (asset, c_2000, c_1000, p_2000) in assets {
-		TestNet::reset();
+	statemine_side(UNIT);
 
-		statemine_side(UNIT);
+	KusamaNet::execute_with(|| {
+		let _ = kusama_runtime::Balances::make_free_balance_be(&child_2000, TEN);
+		assert_eq!(0, kusama_runtime::Balances::free_balance(&child_1000));
+	});
 
-		KusamaNet::execute_with(|| {
-			let _ = kusama_runtime::Balances::make_free_balance_be(&child_2000, TEN);
-		});
+	karura_side(asset);
 
-		karura_side(asset);
+	KusamaNet::execute_with(|| {
+		assert_eq!(
+			TEN - (asset - FEE_WEIGHT),
+			kusama_runtime::Balances::free_balance(&child_2000)
+		);
+		assert_eq!(33_333_334, kusama_runtime::Balances::free_balance(&child_1000));
+	});
 
-		KusamaNet::execute_with(|| {
-			// first xcm send to relaychain with 9 KSM. 10 KSM - 9 KSM = 1 KSM
-			assert_eq!(c_2000, kusama_runtime::Balances::free_balance(&child_2000));
-			// 9 KSM - fee on relaychain = 9 KSM - 106_666_660
-			assert_eq!(c_1000, kusama_runtime::Balances::free_balance(&child_1000));
-		});
+	Statemine::execute_with(|| {
+		use statemine_runtime::*;
+		// Karura send back custom asset to Statemine, ensure recipient got custom asset
+		assert_eq!(UNIT, Assets::balance(0, &AccountId::from(BOB)));
+		// and withdraw sibling parachain sovereign account
+		assert_eq!(9 * UNIT, Assets::balance(0, &para_2000));
 
-		Statemine::execute_with(|| {
-			use statemine_runtime::*;
-			// Karura send back custom asset to Statemine, ensure recipient got custom asset
-			assert_eq!(UNIT, Assets::balance(0, &AccountId::from(BOB)));
-			// the recipient's ksm not changed
-			assert_eq!(UNIT, Balances::free_balance(&AccountId::from(BOB)));
-			// and withdraw sibling parachain sovereign account
-			assert_eq!(9 * UNIT, Assets::balance(0, &para_2000));
-
-			assert_eq!(p_2000, Balances::free_balance(&para_2000));
-		});
-	}
+		assert_eq!(
+			UNIT + FEE_WEIGHT - FEE_STATEMINE,
+			Balances::free_balance(&AccountId::from(BOB))
+		);
+		assert_eq!(996_017_792_418, Balances::free_balance(&para_2000));
+	});
 }
 
 // transfer custom asset from Karura to Statemine
@@ -192,7 +147,7 @@ fn karura_side(fee_amount: u128) {
 		init_statemine_xcm_interface();
 
 		assert_eq!(
-			9_999_936_000_000,
+			9_999_906_760_000,
 			Tokens::free_balance(CurrencyId::ForeignAsset(0), &AccountId::from(BOB))
 		);
 		// ensure sender has enough KSM balance to be charged as fee
@@ -215,11 +170,11 @@ fn karura_side(fee_amount: u128) {
 				)
 				.into()
 			),
-			FEE_STATEMINE as u64
+			FEE_WEIGHT as u64
 		));
 
 		assert_eq!(
-			8_999_936_000_000,
+			8_999_906_760_000,
 			Tokens::free_balance(CurrencyId::ForeignAsset(0), &AccountId::from(BOB))
 		);
 		assert_eq!(TEN - fee_amount, Tokens::free_balance(KSM, &AccountId::from(BOB)));
@@ -230,7 +185,7 @@ fn karura_side(fee_amount: u128) {
 fn statemine_side(para_2000_init_amount: u128) {
 	register_asset();
 
-	let para_acc: AccountId = Sibling::from(2000).into_account();
+	let para_acc: AccountId = Sibling::from(2000).into_account_truncating();
 
 	Statemine::execute_with(|| {
 		use statemine_runtime::*;

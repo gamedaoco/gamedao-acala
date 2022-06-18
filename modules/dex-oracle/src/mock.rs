@@ -21,7 +21,10 @@
 #![cfg(test)]
 
 use super::*;
-use frame_support::{construct_runtime, ord_parameter_types, parameter_types, traits::Everything};
+use frame_support::{
+	construct_runtime, ord_parameter_types, parameter_types,
+	traits::{ConstU64, Everything},
+};
 use frame_system::EnsureSignedBy;
 use primitives::{DexShare, Moment, TokenSymbol};
 use sp_core::{H160, H256};
@@ -49,7 +52,6 @@ mod dex_oracle {
 parameter_types! {
 	pub static AUSDDOTPair: TradingPair = TradingPair::from_currency_ids(AUSD, DOT).unwrap();
 	pub static ACADOTPair: TradingPair = TradingPair::from_currency_ids(ACA, DOT).unwrap();
-	pub const BlockHashCount: u64 = 250;
 }
 
 impl frame_system::Config for Runtime {
@@ -63,7 +65,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type Version = ();
@@ -76,17 +78,13 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
-}
-
-parameter_types! {
-	pub const MinimumPeriod: Moment = 1000;
+	type MaxConsumers = ConstU32<16>;
 }
 
 impl pallet_timestamp::Config for Runtime {
 	type Moment = Moment;
 	type OnTimestampSet = ();
-	type MinimumPeriod = MinimumPeriod;
+	type MinimumPeriod = ConstU64<1000>;
 	type WeightInfo = ();
 }
 
@@ -104,7 +102,7 @@ pub fn set_pool(trading_pair: &TradingPair, pool_0: Balance, pool_1: Balance) {
 }
 
 pub struct MockDEX;
-impl DEXManager<AccountId, CurrencyId, Balance> for MockDEX {
+impl DEXManager<AccountId, Balance, CurrencyId> for MockDEX {
 	fn get_liquidity_pool(currency_id_0: CurrencyId, currency_id_1: CurrencyId) -> (Balance, Balance) {
 		TradingPair::from_currency_ids(currency_id_0, currency_id_1)
 			.map(|trading_pair| {
@@ -132,7 +130,7 @@ impl DEXManager<AccountId, CurrencyId, Balance> for MockDEX {
 		_: CurrencyId,
 		_: SwapLimit<Balance>,
 		_: Vec<Vec<CurrencyId>>,
-	) -> Option<Vec<CurrencyId>> {
+	) -> Option<(Vec<CurrencyId>, Balance, Balance)> {
 		unimplemented!()
 	}
 

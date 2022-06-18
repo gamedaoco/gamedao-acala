@@ -23,14 +23,14 @@
 pub use super::*;
 pub use frame_support::{
 	ord_parameter_types, parameter_types,
-	traits::{Everything, Nothing},
+	traits::{ConstU128, ConstU16, ConstU32, ConstU64, Everything, Nothing},
 };
 pub use frame_system::{EnsureRoot, EnsureSignedBy, RawOrigin};
 pub use module_relaychain::RelayChainCallBuilder;
 pub use module_support::mocks::MockAddressMapping;
 pub use orml_traits::{parameter_type_with_key, XcmTransfer};
 pub use primitives::{Amount, TokenSymbol};
-pub use sp_core::H256;
+pub use sp_core::{H160, H256};
 pub use sp_runtime::{testing::Header, traits::IdentityLookup, AccountId32};
 
 pub use cumulus_primitives_core::ParaId;
@@ -204,7 +204,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 parameter_type_with_key! {
@@ -222,18 +222,18 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type DustRemovalWhitelist = Nothing;
-}
-
-parameter_types! {
-	pub const NativeTokenExistentialDeposit: Balance = 0;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 impl pallet_balances::Config for Runtime {
 	type Balance = Balance;
 	type DustRemoval = ();
 	type Event = Event;
-	type ExistentialDeposit = NativeTokenExistentialDeposit;
+	type ExistentialDeposit = ConstU128<0>;
 	type AccountStore = frame_system::Pallet<Runtime>;
 	type MaxLocks = ();
 	type WeightInfo = ();
@@ -245,6 +245,7 @@ pub type AdaptedBasicCurrency = module_currencies::BasicCurrencyAdapter<Runtime,
 
 parameter_types! {
 	pub const GetNativeCurrencyId: CurrencyId = ACALA;
+	pub Erc20HoldingAccount: H160 = H160::from_low_u64_be(1);
 }
 
 impl module_currencies::Config for Runtime {
@@ -252,9 +253,11 @@ impl module_currencies::Config for Runtime {
 	type MultiCurrency = Tokens;
 	type NativeCurrency = AdaptedBasicCurrency;
 	type GetNativeCurrencyId = GetNativeCurrencyId;
+	type Erc20HoldingAccount = Erc20HoldingAccount;
 	type WeightInfo = ();
 	type AddressMapping = MockAddressMapping;
 	type EVMBridge = ();
+	type GasToWeight = ();
 	type SweepOrigin = EnsureSignedBy<Root, AccountId>;
 	type OnDust = ();
 }
@@ -272,13 +275,8 @@ parameter_types! {
 	pub BaseWithdrawFee: Permill = Permill::from_rational(1u32, 1_000u32); // 0.1%
 	pub HomaUnbondFee: Balance = dollar(1);
 	pub const ParachainAccount: AccountId = DAVE;
-	pub const MaximumRedeemRequestMatchesForMint: u32 = 2;
 	pub static MockRelayBlockNumberProvider: u64 = 0;
-	pub const RelayChainUnbondingSlashingSpans: u32 = 5;
-	pub const MaxScheduledUnbonds: u32 = 14;
-	pub const SubAccountIndex: u16 = 0;
 	pub ParachainId: ParaId = ParaId::from(PARACHAIN_ID);
-	pub const StakingUpdateFrequency: BlockNumber = 100;
 }
 ord_parameter_types! {
 	pub const Root: AccountId = DAVE;
@@ -303,7 +301,7 @@ impl Config for Runtime {
 	type MinimumRedeemThreshold = MinimumRedeemThreshold;
 	type XcmTransfer = MockXcm;
 	type SovereignSubAccountLocation = MockXcmDestination;
-	type SubAccountIndex = SubAccountIndex;
+	type SubAccountIndex = ConstU16<0>;
 	type DefaultExchangeRate = DefaultExchangeRate;
 	type MaxRewardPerEra = MaxRewardPerEra;
 	type MintFee = MintFee;
@@ -312,10 +310,10 @@ impl Config for Runtime {
 	type HomaUnbondFee = HomaUnbondFee;
 	type RelayChainBlockNumber = MockRelayBlockNumberProvider;
 	type ParachainAccount = ParachainAccount;
-	type MaximumRedeemRequestMatchesForMint = MaximumRedeemRequestMatchesForMint;
-	type RelayChainUnbondingSlashingSpans = RelayChainUnbondingSlashingSpans;
-	type MaxScheduledUnbonds = MaxScheduledUnbonds;
-	type StakingUpdateFrequency = StakingUpdateFrequency;
+	type MaximumRedeemRequestMatchesForMint = ConstU32<2>;
+	type RelayChainUnbondingSlashingSpans = ConstU32<5>;
+	type MaxScheduledUnbonds = ConstU32<14>;
+	type StakingUpdateFrequency = ConstU64<100>;
 }
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Runtime>;

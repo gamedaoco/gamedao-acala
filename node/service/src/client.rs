@@ -147,11 +147,11 @@ pub trait ClientHandle {
 #[derive(Clone)]
 pub enum Client {
 	#[cfg(feature = "with-mandala-runtime")]
-	Mandala(Arc<crate::FullClient<mandala_runtime::RuntimeApi, crate::MandalaExecutorDispatch>>),
+	Mandala(Arc<crate::FullClient<mandala_runtime::RuntimeApi>>),
 	#[cfg(feature = "with-karura-runtime")]
-	Karura(Arc<crate::FullClient<karura_runtime::RuntimeApi, crate::KaruraExecutorDispatch>>),
+	Karura(Arc<crate::FullClient<karura_runtime::RuntimeApi>>),
 	#[cfg(feature = "with-acala-runtime")]
-	Acala(Arc<crate::FullClient<acala_runtime::RuntimeApi, crate::AcalaExecutorDispatch>>),
+	Acala(Arc<crate::FullClient<acala_runtime::RuntimeApi>>),
 }
 
 impl ClientHandle for Client {
@@ -266,6 +266,17 @@ impl sc_client_api::BlockBackend<Block> for Client {
 			Self::Karura(client) => client.block_indexed_body(id),
 			#[cfg(feature = "with-acala-runtime")]
 			Self::Acala(client) => client.block_indexed_body(id),
+		}
+	}
+
+	fn requires_full_sync(&self) -> bool {
+		match self {
+			#[cfg(feature = "with-mandala-runtime")]
+			Self::Mandala(client) => client.requires_full_sync(),
+			#[cfg(feature = "with-karura-runtime")]
+			Self::Karura(client) => client.requires_full_sync(),
+			#[cfg(feature = "with-acala-runtime")]
+			Self::Acala(client) => client.requires_full_sync(),
 		}
 	}
 }

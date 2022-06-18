@@ -23,13 +23,13 @@
 use super::*;
 use frame_support::{
 	ord_parameter_types, parameter_types,
-	traits::{Everything, Nothing},
+	traits::{ConstU32, ConstU64, Everything, Nothing},
 };
 use frame_system::EnsureSignedBy;
 use module_support::mocks::MockAddressMapping;
 use orml_traits::parameter_type_with_key;
 use primitives::{Amount, TokenSymbol};
-use sp_core::H256;
+use sp_core::{H160, H256};
 use sp_runtime::{testing::Header, traits::IdentityLookup, AccountId32};
 
 pub type AccountId = AccountId32;
@@ -48,10 +48,6 @@ pub const KSM: CurrencyId = CurrencyId::Token(TokenSymbol::KSM);
 pub const CASH: CurrencyId = CurrencyId::Token(TokenSymbol::CASH);
 pub const INITIAL_BALANCE: Balance = 1000000;
 
-parameter_types! {
-	pub const BlockHashCount: u64 = 250;
-}
-
 impl frame_system::Config for Runtime {
 	type BaseCallFilter = Everything;
 	type BlockWeights = ();
@@ -66,7 +62,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type DbWeight = ();
 	type Version = ();
 	type PalletInfo = PalletInfo;
@@ -76,7 +72,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 parameter_type_with_key! {
@@ -98,7 +94,11 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type DustRemovalWhitelist = Nothing;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 parameter_types! {
@@ -121,6 +121,7 @@ pub type AdaptedBasicCurrency = module_currencies::BasicCurrencyAdapter<Runtime,
 
 parameter_types! {
 	pub const GetNativeCurrencyId: CurrencyId = ACALA;
+	pub Erc20HoldingAccount: H160 = H160::from_low_u64_be(1);
 }
 
 impl module_currencies::Config for Runtime {
@@ -128,9 +129,11 @@ impl module_currencies::Config for Runtime {
 	type MultiCurrency = Tokens;
 	type NativeCurrency = AdaptedBasicCurrency;
 	type GetNativeCurrencyId = GetNativeCurrencyId;
+	type Erc20HoldingAccount = Erc20HoldingAccount;
 	type WeightInfo = ();
 	type AddressMapping = MockAddressMapping;
 	type EVMBridge = ();
+	type GasToWeight = ();
 	type SweepOrigin = EnsureSignedBy<One, AccountId>;
 	type OnDust = ();
 }

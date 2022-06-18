@@ -23,7 +23,7 @@
 use super::*;
 use frame_support::{
 	construct_runtime, ord_parameter_types, parameter_types,
-	traits::{Everything, Nothing},
+	traits::{ConstU64, Everything, Nothing},
 };
 use frame_system::EnsureSignedBy;
 use orml_traits::{parameter_type_with_key, DataFeeder};
@@ -57,10 +57,6 @@ mod prices {
 	pub use super::super::*;
 }
 
-parameter_types! {
-	pub const BlockHashCount: u64 = 250;
-}
-
 impl frame_system::Config for Runtime {
 	type Origin = Origin;
 	type Index = u64;
@@ -72,7 +68,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type Version = ();
@@ -85,7 +81,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 thread_local! {
@@ -139,7 +135,7 @@ impl ExchangeRateProvider for MockLiquidStakingExchangeProvider {
 }
 
 pub struct MockDEX;
-impl DEXManager<AccountId, CurrencyId, Balance> for MockDEX {
+impl DEXManager<AccountId, Balance, CurrencyId> for MockDEX {
 	fn get_liquidity_pool(currency_id_a: CurrencyId, currency_id_b: CurrencyId) -> (Balance, Balance) {
 		match (currency_id_a, currency_id_b) {
 			(AUSD, DOT) => (10000, 200),
@@ -160,7 +156,7 @@ impl DEXManager<AccountId, CurrencyId, Balance> for MockDEX {
 		_: CurrencyId,
 		_: SwapLimit<Balance>,
 		_: Vec<Vec<CurrencyId>>,
-	) -> Option<Vec<CurrencyId>> {
+	) -> Option<(Vec<CurrencyId>, Balance, Balance)> {
 		unimplemented!()
 	}
 
@@ -212,7 +208,11 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type DustRemovalWhitelist = Nothing;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 impl BlockNumberProvider for MockRelayBlockNumberProvider {

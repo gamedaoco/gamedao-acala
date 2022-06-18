@@ -31,14 +31,14 @@ jobs:
       CARGO_INCREMENTAL: 0
     needs: clean-up-actions
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: recursive
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly-2021-11-07
+          toolchain: nightly-2022-02-19
           components: rustfmt
           target: wasm32-unknown-unknown
           default: true
@@ -54,6 +54,8 @@ jobs:
         run: cargo clippy --features with-karura-runtime -- -D warnings
       - name: Run acala-runtime clippy
         run: cargo clippy --features with-acala-runtime -- -D warnings
+      - name: Run build benches
+        run: make build-benches
   benchmarking:
     runs-on: [self-hosted, linux]
     env:
@@ -61,14 +63,14 @@ jobs:
       CARGO_INCREMENTAL: 0
     needs: clean-up-actions
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: recursive
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly-2021-11-07
+          toolchain: nightly-2022-02-19
           components: rustfmt
           target: wasm32-unknown-unknown
           default: true
@@ -81,14 +83,14 @@ jobs:
       CARGO_INCREMENTAL: 0
     needs: clean-up-actions
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: recursive
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly-2021-11-07
+          toolchain: nightly-2022-02-19
           components: rustfmt
           target: wasm32-unknown-unknown
           default: true
@@ -107,14 +109,14 @@ jobs:
       CARGO_INCREMENTAL: 0
     needs: clean-up-actions
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: recursive
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly-2021-11-07
+          toolchain: nightly-2022-02-19
           components: rustfmt
           target: wasm32-unknown-unknown
           default: true

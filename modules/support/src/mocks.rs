@@ -17,18 +17,24 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #![allow(clippy::type_complexity)]
-use crate::{AddressMapping, CurrencyId, Erc20InfoMapping};
+use crate::{AddressMapping, CurrencyId, Erc20InfoMapping, TransactionPayment};
 use codec::Encode;
-use nutsfinance_stable_asset::traits::StableAsset;
-use nutsfinance_stable_asset::{PoolTokenIndex, RedeemProportionResult, StableAssetPoolId, StableAssetPoolInfo};
+use frame_support::pallet_prelude::{DispatchClass, Pays, Weight};
+use nutsfinance_stable_asset::{
+	traits::StableAsset, PoolTokenIndex, RedeemProportionResult, StableAssetPoolId, StableAssetPoolInfo, SwapResult,
+};
 use primitives::{
 	currency::TokenInfo,
 	evm::{EvmAddress, H160_POSITION_TOKEN},
+	Multiplier, ReserveIdentifier,
 };
 use sp_core::{crypto::AccountId32, H160};
 use sp_io::hashing::blake2_256;
-use sp_runtime::DispatchResult;
-use sp_std::vec::Vec;
+use sp_runtime::{transaction_validity::TransactionValidityError, DispatchError, DispatchResult};
+use sp_std::{marker::PhantomData, vec::Vec};
+
+#[cfg(feature = "std")]
+use frame_support::traits::Imbalance;
 
 pub struct MockAddressMapping;
 
@@ -96,6 +102,116 @@ impl Erc20InfoMapping for MockErc20InfoMapping {
 	}
 }
 
+#[cfg(feature = "std")]
+impl<AccountId, Balance: Default + Copy, NegativeImbalance: Imbalance<Balance>>
+	TransactionPayment<AccountId, Balance, NegativeImbalance> for ()
+{
+	fn reserve_fee(
+		_who: &AccountId,
+		_fee: Balance,
+		_named: Option<ReserveIdentifier>,
+	) -> Result<Balance, DispatchError> {
+		Ok(Default::default())
+	}
+
+	fn unreserve_fee(_who: &AccountId, _fee: Balance, _named: Option<ReserveIdentifier>) -> Balance {
+		Default::default()
+	}
+
+	fn unreserve_and_charge_fee(
+		_who: &AccountId,
+		_weight: Weight,
+	) -> Result<(Balance, NegativeImbalance), TransactionValidityError> {
+		Ok((Default::default(), Imbalance::zero()))
+	}
+
+	fn refund_fee(
+		_who: &AccountId,
+		_weight: Weight,
+		_payed: NegativeImbalance,
+	) -> Result<(), TransactionValidityError> {
+		Ok(())
+	}
+
+	fn charge_fee(
+		_who: &AccountId,
+		_len: u32,
+		_weight: Weight,
+		_tip: Balance,
+		_pays_fee: Pays,
+		_class: DispatchClass,
+	) -> Result<(), TransactionValidityError> {
+		Ok(())
+	}
+
+	fn weight_to_fee(_weight: Weight) -> Balance {
+		Default::default()
+	}
+
+	fn apply_multiplier_to_fee(_fee: Balance, _multiplier: Option<Multiplier>) -> Balance {
+		Default::default()
+	}
+}
+
+/// Given provided `Currency`, implements default reserve behavior
+pub struct MockReservedTransactionPayment<Currency>(PhantomData<Currency>);
+
+#[cfg(feature = "std")]
+impl<
+		AccountId,
+		Balance: Default + Copy,
+		NegativeImbalance: Imbalance<Balance>,
+		Currency: frame_support::traits::NamedReservableCurrency<
+			AccountId,
+			ReserveIdentifier = ReserveIdentifier,
+			Balance = Balance,
+		>,
+	> TransactionPayment<AccountId, Balance, NegativeImbalance> for MockReservedTransactionPayment<Currency>
+{
+	fn reserve_fee(who: &AccountId, fee: Balance, named: Option<ReserveIdentifier>) -> Result<Balance, DispatchError> {
+		Currency::reserve_named(&named.unwrap(), who, fee)?;
+		Ok(fee)
+	}
+
+	fn unreserve_fee(who: &AccountId, fee: Balance, named: Option<ReserveIdentifier>) -> Balance {
+		Currency::unreserve_named(&named.unwrap(), who, fee)
+	}
+
+	fn unreserve_and_charge_fee(
+		_who: &AccountId,
+		_weight: Weight,
+	) -> Result<(Balance, NegativeImbalance), TransactionValidityError> {
+		Ok((Default::default(), Imbalance::zero()))
+	}
+
+	fn refund_fee(
+		_who: &AccountId,
+		_weight: Weight,
+		_payed: NegativeImbalance,
+	) -> Result<(), TransactionValidityError> {
+		Ok(())
+	}
+
+	fn charge_fee(
+		_who: &AccountId,
+		_len: u32,
+		_weight: Weight,
+		_tip: Balance,
+		_pays_fee: Pays,
+		_class: DispatchClass,
+	) -> Result<(), TransactionValidityError> {
+		Ok(())
+	}
+
+	fn weight_to_fee(_weight: Weight) -> Balance {
+		Default::default()
+	}
+
+	fn apply_multiplier_to_fee(_fee: Balance, _multiplier: Option<Multiplier>) -> Balance {
+		Default::default()
+	}
+}
+
 pub struct MockStableAsset<CurrencyId, Balance, AccountId, BlockNumber> {
 	_value1: CurrencyId,
 	_value2: Balance,
@@ -153,7 +269,7 @@ impl<CurrencyId, Balance, AccountId, BlockNumber> StableAsset
 		_dx: Self::Balance,
 		_min_dy: Self::Balance,
 		_asset_length: u32,
-	) -> DispatchResult {
+	) -> sp_std::result::Result<(Self::Balance, Self::Balance), DispatchError> {
 		unimplemented!()
 	}
 
@@ -263,6 +379,32 @@ impl<CurrencyId, Balance, AccountId, BlockNumber> StableAsset
 		>,
 		_amount_bal: Self::Balance,
 	) -> Option<RedeemProportionResult<Self::Balance>> {
+		unimplemented!()
+	}
+
+	fn get_best_route(
+		_input_asset: Self::AssetId,
+		_output_asset: Self::AssetId,
+		_input_amount: Self::Balance,
+	) -> Option<(StableAssetPoolId, PoolTokenIndex, PoolTokenIndex, Self::Balance)> {
+		None
+	}
+
+	fn get_swap_output_amount(
+		_pool_id: StableAssetPoolId,
+		_input_index: PoolTokenIndex,
+		_output_index: PoolTokenIndex,
+		_dx_bal: Self::Balance,
+	) -> Option<SwapResult<Self::Balance>> {
+		unimplemented!()
+	}
+
+	fn get_swap_input_amount(
+		_pool_id: StableAssetPoolId,
+		_input_index: PoolTokenIndex,
+		_output_index: PoolTokenIndex,
+		_dy_bal: Self::Balance,
+	) -> Option<SwapResult<Self::Balance>> {
 		unimplemented!()
 	}
 }

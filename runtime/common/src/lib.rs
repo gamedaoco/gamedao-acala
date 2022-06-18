@@ -19,12 +19,12 @@
 //! Common runtime code for Acala, Karura and Mandala.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![recursion_limit = "256"]
 
 use codec::{Decode, Encode, MaxEncodedLen};
-use frame_support::traits::Get;
 use frame_support::{
 	parameter_types,
-	traits::{Contains, EnsureOneOf},
+	traits::{Contains, EnsureOneOf, Get},
 	weights::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, WEIGHT_PER_MILLIS},
 		DispatchClass, Weight,
@@ -32,20 +32,26 @@ use frame_support::{
 	RuntimeDebug,
 };
 use frame_system::{limits, EnsureRoot};
-pub use module_support::{ExchangeRate, PrecompileCallerFilter, Price, Rate, Ratio};
-use primitives::{evm::is_system_contract, Balance, BlockNumber, CurrencyId, Nonce};
+use module_evm::GenesisAccount;
+use orml_traits::GetByKey;
+use primitives::{evm::is_system_contract, Balance, CurrencyId, Nonce};
 use scale_info::TypeInfo;
-use sp_core::{
-	u32_trait::{_1, _2, _3, _4},
-	Bytes, H160,
-};
-use sp_runtime::{
-	traits::{BlockNumberProvider, Convert},
-	transaction_validity::TransactionPriority,
-	FixedPointNumber, Perbill,
-};
-use sp_std::collections::btree_map::BTreeMap;
+use sp_core::{Bytes, H160};
+use sp_runtime::{traits::Convert, transaction_validity::TransactionPriority, Perbill};
+use sp_std::{collections::btree_map::BTreeMap, marker::PhantomData, prelude::*};
 use static_assertions::const_assert;
+
+pub use check_nonce::CheckNonce;
+pub use module_support::{ExchangeRate, PrecompileCallerFilter, Price, Rate, Ratio};
+pub use precompile::{
+	AllPrecompiles, DEXPrecompile, EVMPrecompile, MultiCurrencyPrecompile, NFTPrecompile, OraclePrecompile,
+	SchedulePrecompile, StableAssetPrecompile,
+};
+pub use primitives::{
+	currency::{TokenInfo, ACA, AUSD, BNC, DOT, KAR, KBTC, KINT, KSM, KUSD, LCDOT, LDOT, LKSM, PHA, RENBTC, VSKSM},
+	AccountId,
+};
+pub use xcm_impl::{native_currency_location, AcalaDropAssets, FixedRateOfAsset};
 
 #[cfg(feature = "std")]
 use sp_core::bytes::from_hex;
@@ -55,27 +61,11 @@ use std::str::FromStr;
 pub mod bench;
 pub mod check_nonce;
 pub mod precompile;
-
-#[cfg(test)]
-mod mock;
-
-pub use check_nonce::CheckNonce;
-use module_evm::GenesisAccount;
-use orml_traits::GetByKey;
-pub use precompile::{
-	AllPrecompiles, DEXPrecompile, EVMPrecompile, MultiCurrencyPrecompile, NFTPrecompile, OraclePrecompile,
-	SchedulePrecompile,
-};
-pub use primitives::{
-	currency::{TokenInfo, ACA, AUSD, BNC, DOT, KAR, KBTC, KINT, KSM, KUSD, LCDOT, LDOT, LKSM, PHA, RENBTC, VSKSM},
-	AccountId,
-};
-use sp_std::{marker::PhantomData, prelude::*};
-pub use xcm::latest::prelude::*;
-pub use xcm_builder::TakeRevenue;
-pub use xcm_executor::{traits::DropAssets, Assets};
+pub mod xcm_impl;
 
 mod gas_to_weight_ratio;
+#[cfg(test)]
+mod mock;
 
 pub type TimeStampedPrice = orml_oracle::TimestampedValue<Price, primitives::Moment>;
 
@@ -116,11 +106,28 @@ impl Convert<u64, Weight> for GasToWeight {
 	}
 }
 
+pub struct ExistentialDepositsTimesOneHundred<NativeCurrencyId, NativeED, OtherEDs>(
+	PhantomData<(NativeCurrencyId, NativeED, OtherEDs)>,
+);
+impl<NativeCurrencyId: Get<CurrencyId>, NativeED: Get<Balance>, OtherEDs: GetByKey<CurrencyId, Balance>>
+	GetByKey<CurrencyId, Balance> for ExistentialDepositsTimesOneHundred<NativeCurrencyId, NativeED, OtherEDs>
+{
+	fn get(currency_id: &CurrencyId) -> Balance {
+		if *currency_id == NativeCurrencyId::get() {
+			NativeED::get().saturating_mul(100u128)
+		} else {
+			OtherEDs::get(currency_id).saturating_mul(100u128)
+		}
+	}
+}
+
 /// Convert weight to gas
 pub struct WeightToGas;
 impl Convert<Weight, u64> for WeightToGas {
 	fn convert(weight: Weight) -> u64 {
-		weight.saturating_div(gas_to_weight_ratio::RATIO)
+		weight
+			.checked_div(gas_to_weight_ratio::RATIO)
+			.expect("Compile-time constant is not zero; qed;")
 	}
 }
 
@@ -194,22 +201,6 @@ pub fn microcent(currency_id: CurrencyId) -> Balance {
 	millicent(currency_id) / 1000
 }
 
-pub fn calculate_asset_ratio(foreign_asset: (AssetId, u128), native_asset: (AssetId, u128)) -> Ratio {
-	Ratio::saturating_from_rational(foreign_asset.1, native_asset.1)
-}
-
-pub struct RelayChainBlockNumberProvider<T>(sp_std::marker::PhantomData<T>);
-
-impl<T: cumulus_pallet_parachain_system::Config> BlockNumberProvider for RelayChainBlockNumberProvider<T> {
-	type BlockNumber = BlockNumber;
-
-	fn current_block_number() -> Self::BlockNumber {
-		cumulus_pallet_parachain_system::Pallet::<T>::validation_data()
-			.map(|d| d.relay_parent_number)
-			.unwrap_or_default()
-	}
-}
-
 pub type GeneralCouncilInstance = pallet_collective::Instance1;
 pub type FinancialCouncilInstance = pallet_collective::Instance2;
 pub type HomaCouncilInstance = pallet_collective::Instance3;
@@ -224,27 +215,27 @@ pub type OperatorMembershipInstanceAcala = pallet_membership::Instance5;
 // General Council
 pub type EnsureRootOrAllGeneralCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _1, AccountId, GeneralCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, GeneralCouncilInstance, 1, 1>,
 >;
 
 pub type EnsureRootOrHalfGeneralCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _2, AccountId, GeneralCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, GeneralCouncilInstance, 1, 2>,
 >;
 
 pub type EnsureRootOrOneThirdsGeneralCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _3, AccountId, GeneralCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, GeneralCouncilInstance, 1, 3>,
 >;
 
 pub type EnsureRootOrTwoThirdsGeneralCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_2, _3, AccountId, GeneralCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, GeneralCouncilInstance, 2, 3>,
 >;
 
 pub type EnsureRootOrThreeFourthsGeneralCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_3, _4, AccountId, GeneralCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, GeneralCouncilInstance, 3, 4>,
 >;
 
 pub type EnsureRootOrOneGeneralCouncil =
@@ -253,79 +244,79 @@ pub type EnsureRootOrOneGeneralCouncil =
 // Financial Council
 pub type EnsureRootOrAllFinancialCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _1, AccountId, FinancialCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, FinancialCouncilInstance, 1, 1>,
 >;
 
 pub type EnsureRootOrHalfFinancialCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _2, AccountId, FinancialCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, FinancialCouncilInstance, 1, 2>,
 >;
 
 pub type EnsureRootOrOneThirdsFinancialCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _3, AccountId, FinancialCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, FinancialCouncilInstance, 1, 3>,
 >;
 
 pub type EnsureRootOrTwoThirdsFinancialCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_2, _3, AccountId, FinancialCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, FinancialCouncilInstance, 2, 3>,
 >;
 
 pub type EnsureRootOrThreeFourthsFinancialCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_3, _4, AccountId, FinancialCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, FinancialCouncilInstance, 3, 4>,
 >;
 
 // Homa Council
 pub type EnsureRootOrAllHomaCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _1, AccountId, HomaCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, HomaCouncilInstance, 1, 1>,
 >;
 
 pub type EnsureRootOrHalfHomaCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _2, AccountId, HomaCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, HomaCouncilInstance, 1, 2>,
 >;
 
 pub type EnsureRootOrOneThirdsHomaCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _3, AccountId, HomaCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, HomaCouncilInstance, 1, 3>,
 >;
 
 pub type EnsureRootOrTwoThirdsHomaCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_2, _3, AccountId, HomaCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, HomaCouncilInstance, 2, 3>,
 >;
 
 pub type EnsureRootOrThreeFourthsHomaCouncil = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_3, _4, AccountId, HomaCouncilInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, HomaCouncilInstance, 3, 4>,
 >;
 
 // Technical Committee Council
 pub type EnsureRootOrAllTechnicalCommittee = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _1, AccountId, TechnicalCommitteeInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, TechnicalCommitteeInstance, 1, 1>,
 >;
 
 pub type EnsureRootOrHalfTechnicalCommittee = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _2, AccountId, TechnicalCommitteeInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, TechnicalCommitteeInstance, 1, 2>,
 >;
 
 pub type EnsureRootOrOneThirdsTechnicalCommittee = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_1, _3, AccountId, TechnicalCommitteeInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, TechnicalCommitteeInstance, 1, 3>,
 >;
 
 pub type EnsureRootOrTwoThirdsTechnicalCommittee = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_2, _3, AccountId, TechnicalCommitteeInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, TechnicalCommitteeInstance, 2, 3>,
 >;
 
 pub type EnsureRootOrThreeFourthsTechnicalCommittee = EnsureOneOf<
 	EnsureRoot<AccountId>,
-	pallet_collective::EnsureProportionAtLeast<_3, _4, AccountId, TechnicalCommitteeInstance>,
+	pallet_collective::EnsureProportionAtLeast<AccountId, TechnicalCommitteeInstance, 3, 4>,
 >;
 
 /// The type used to represent the kinds of proxying allowed.
@@ -338,82 +329,31 @@ pub enum ProxyType {
 	Swap,
 	Loan,
 	DexLiquidity,
+	StableAssetSwap,
+	StableAssetLiquidity,
+	Homa,
 }
+
 impl Default for ProxyType {
 	fn default() -> Self {
 		Self::Any
 	}
 }
 
-#[repr(u16)]
-pub enum RelayChainSubAccountId {
-	HomaLite = 0,
-}
-
-/// `DropAssets` implementation support asset amount lower thant ED handled by `TakeRevenue`.
-///
-/// parameters type:
-/// - `NC`: native currency_id type.
-/// - `NB`: the ExistentialDeposit amount of native currency_id.
-/// - `GK`: the ExistentialDeposit amount of tokens.
-pub struct AcalaDropAssets<X, T, C, NC, NB, GK>(PhantomData<(X, T, C, NC, NB, GK)>);
-impl<X, T, C, NC, NB, GK> DropAssets for AcalaDropAssets<X, T, C, NC, NB, GK>
+pub struct EvmLimits<T>(PhantomData<T>);
+impl<T> EvmLimits<T>
 where
-	X: DropAssets,
-	T: TakeRevenue,
-	C: Convert<MultiLocation, Option<CurrencyId>>,
-	NC: Get<CurrencyId>,
-	NB: Get<Balance>,
-	GK: GetByKey<CurrencyId, Balance>,
+	T: frame_system::Config,
 {
-	fn drop_assets(origin: &MultiLocation, assets: Assets) -> Weight {
-		let multi_assets: Vec<MultiAsset> = assets.into();
-		let mut asset_traps: Vec<MultiAsset> = vec![];
-		for asset in multi_assets {
-			if let MultiAsset {
-				id: Concrete(location),
-				fun: Fungible(amount),
-			} = asset.clone()
-			{
-				let currency_id = C::convert(location);
-				// burn asset(do nothing here) if convert result is None
-				if let Some(currency_id) = currency_id {
-					let ed = ExistentialDepositsForDropAssets::<NC, NB, GK>::get(&currency_id);
-					if amount < ed {
-						T::take_revenue(asset);
-					} else {
-						asset_traps.push(asset);
-					}
-				}
-			}
-		}
-		if !asset_traps.is_empty() {
-			X::drop_assets(origin, asset_traps.into());
-		}
-		0
+	pub fn max_gas_limit() -> u64 {
+		let weights = T::BlockWeights::get();
+		let normal_weight = weights.get(DispatchClass::Normal);
+		WeightToGas::convert(normal_weight.max_extrinsic.unwrap_or(weights.max_block))
 	}
-}
 
-/// `ExistentialDeposit` for tokens, give priority to match native token, then handled by
-/// `ExistentialDeposits`.
-///
-/// parameters type:
-/// - `NC`: native currency_id type.
-/// - `NB`: the ExistentialDeposit amount of native currency_id.
-/// - `GK`: the ExistentialDeposit amount of tokens.
-pub struct ExistentialDepositsForDropAssets<NC, NB, GK>(PhantomData<(NC, NB, GK)>);
-impl<NC, NB, GK> ExistentialDepositsForDropAssets<NC, NB, GK>
-where
-	NC: Get<CurrencyId>,
-	NB: Get<Balance>,
-	GK: GetByKey<CurrencyId, Balance>,
-{
-	fn get(currency_id: &CurrencyId) -> Balance {
-		if currency_id == &NC::get() {
-			NB::get()
-		} else {
-			GK::get(currency_id)
-		}
+	pub fn max_storage_limit() -> u32 {
+		let length = T::BlockLength::get();
+		*length.max.get(DispatchClass::Normal)
 	}
 }
 

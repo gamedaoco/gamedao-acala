@@ -1,6 +1,6 @@
 import { expect } from "chai";
 
-import { describeWithAcala, getEvmNonce } from "./util";
+import { describeWithAcala, getEvmNonce, transfer } from "./util";
 import { Signer } from "@acala-network/bodhi";
 import { Wallet } from "@ethersproject/wallet";
 import { encodeAddress } from "@polkadot/keyring";
@@ -33,8 +33,7 @@ describeWithAcala("Acala RPC (Sign eip1559)", (context) => {
 
 		expect(subAddr).to.equal("5EMjsczQH4R2WZaB5Svau8HWZp1aAfMqjxfv3GeLWotYSkLc");
 
-		await context.provider.api.tx.balances.transfer(subAddr, "10000000000000")
-			.signAndSend(await alice.getSubstrateAddress());
+		await transfer(context, await alice.getSubstrateAddress(), subAddr, 10000000000000);
 
 		factory = new ethers.ContractFactory(Erc20DemoContract.abi, Erc20DemoContract.bytecode);
 	});
@@ -49,7 +48,7 @@ describeWithAcala("Acala RPC (Sign eip1559)", (context) => {
 	it("create should sign and verify", async function () {
 		this.timeout(150000);
 
-		const chain_id = +context.provider.api.consts.evm.chainId.toString()
+		const chain_id = +context.provider.api.consts.evmAccounts.chainId.toString()
 		const nonce = await getEvmNonce(context.provider, signer.address);
 		const validUntil = (await context.provider.api.rpc.chain.getHeader()).number.toNumber() + 100
 		const storageLimit = 20000;
@@ -190,7 +189,7 @@ describeWithAcala("Acala RPC (Sign eip1559)", (context) => {
 	it("call should sign and verify", async function () {
 		this.timeout(150000);
 
-		const chain_id = +context.provider.api.consts.evm.chainId.toString();
+		const chain_id = +context.provider.api.consts.evmAccounts.chainId.toString();
 		const nonce = await getEvmNonce(context.provider, signer.address);
 		const validUntil = (await context.provider.api.rpc.chain.getHeader()).number.toNumber() + 100;
 		const storageLimit = 1000;

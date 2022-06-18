@@ -23,16 +23,19 @@
 use super::*;
 use frame_support::{
 	construct_runtime, ord_parameter_types, parameter_types,
-	traits::{EnsureOneOf, Everything, Nothing},
+	traits::{ConstU128, ConstU32, ConstU64, EnsureOneOf, Everything, Nothing},
 };
 use frame_system::{EnsureRoot, EnsureSignedBy};
 use nutsfinance_stable_asset::traits::StableAsset;
-use nutsfinance_stable_asset::{PoolTokenIndex, RedeemProportionResult, StableAssetPoolId, StableAssetPoolInfo};
+use nutsfinance_stable_asset::{
+	PoolTokenIndex, RedeemProportionResult, StableAssetPoolId, StableAssetPoolInfo, SwapResult,
+};
 use orml_traits::parameter_type_with_key;
 use primitives::{DexShare, TokenSymbol, TradingPair};
 use sp_core::H256;
 use sp_runtime::{testing::Header, traits::IdentityLookup};
 use sp_std::cell::RefCell;
+use support::SpecificJointsSwap;
 
 pub type AccountId = u128;
 pub type BlockNumber = u64;
@@ -54,10 +57,6 @@ mod cdp_treasury {
 	pub use super::super::*;
 }
 
-parameter_types! {
-	pub const BlockHashCount: u64 = 250;
-}
-
 impl frame_system::Config for Runtime {
 	type Origin = Origin;
 	type Index = u64;
@@ -69,7 +68,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type Version = ();
@@ -82,7 +81,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 parameter_type_with_key! {
@@ -100,18 +99,18 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type DustRemovalWhitelist = Nothing;
-}
-
-parameter_types! {
-	pub const ExistentialDeposit: Balance = 1;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 impl pallet_balances::Config for Runtime {
 	type Balance = Balance;
 	type DustRemoval = ();
 	type Event = Event;
-	type ExistentialDeposit = ExistentialDeposit;
+	type ExistentialDeposit = ConstU128<1>;
 	type AccountStore = frame_system::Pallet<Runtime>;
 	type MaxLocks = ();
 	type MaxReserves = ();
@@ -125,7 +124,6 @@ parameter_types! {
 }
 
 impl orml_currencies::Config for Runtime {
-	type Event = Event;
 	type MultiCurrency = Tokens;
 	type NativeCurrency = AdaptedBasicCurrency;
 	type GetNativeCurrencyId = GetNativeCurrencyId;
@@ -135,27 +133,25 @@ impl orml_currencies::Config for Runtime {
 parameter_types! {
 	pub const GetStableCurrencyId: CurrencyId = AUSD;
 	pub const GetExchangeFee: (u32, u32) = (0, 100);
-	pub const TradingPathLimit: u32 = 4;
 	pub EnabledTradingPairs: Vec<TradingPair> = vec![
 		TradingPair::from_currency_ids(AUSD, BTC).unwrap(),
 		TradingPair::from_currency_ids(AUSD, DOT).unwrap(),
 		TradingPair::from_currency_ids(BTC, DOT).unwrap(),
 	];
 	pub const DEXPalletId: PalletId = PalletId(*b"aca/dexm");
-	pub const ExtendedProvisioningBlocks: BlockNumber = 0;
 }
 
 impl module_dex::Config for Runtime {
 	type Event = Event;
 	type Currency = Currencies;
 	type GetExchangeFee = GetExchangeFee;
-	type TradingPathLimit = TradingPathLimit;
+	type TradingPathLimit = ConstU32<4>;
 	type PalletId = DEXPalletId;
 	type Erc20InfoMapping = ();
 	type DEXIncentives = ();
 	type WeightInfo = ();
 	type ListingOrigin = EnsureSignedBy<One, AccountId>;
-	type ExtendedProvisioningBlocks = ExtendedProvisioningBlocks;
+	type ExtendedProvisioningBlocks = ConstU64<0>;
 	type OnLiquidityPoolUpdated = ();
 }
 
@@ -196,7 +192,6 @@ impl AuctionManager<AccountId> for MockAuctionManager {
 
 ord_parameter_types! {
 	pub const One: AccountId = 1;
-	pub const MaxAuctionsCount: u32 = 5;
 }
 
 parameter_types! {
@@ -218,10 +213,10 @@ impl Config for Runtime {
 	type AuctionManagerHandler = MockAuctionManager;
 	type UpdateOrigin = EnsureOneOf<EnsureRoot<AccountId>, EnsureSignedBy<One, AccountId>>;
 	type DEX = DEXModule;
-	type MaxAuctionsCount = MaxAuctionsCount;
+	type Swap = SpecificJointsSwap<DEXModule, AlternativeSwapPathJointList>;
+	type MaxAuctionsCount = ConstU32<5>;
 	type PalletId = CDPTreasuryPalletId;
 	type TreasuryAccount = TreasuryAccount;
-	type AlternativeSwapPathJointList = AlternativeSwapPathJointList;
 	type WeightInfo = ();
 	type StableAsset = MockStableAsset;
 }
@@ -237,7 +232,7 @@ construct_runtime!(
 	{
 		System: frame_system::{Pallet, Call, Storage, Config, Event<T>},
 		CDPTreasuryModule: cdp_treasury::{Pallet, Storage, Call, Config, Event<T>},
-		Currencies: orml_currencies::{Pallet, Call, Event<T>},
+		Currencies: orml_currencies::{Pallet, Call},
 		Tokens: orml_tokens::{Pallet, Storage, Event<T>, Config<T>},
 		PalletBalances: pallet_balances::{Pallet, Call, Storage, Event<T>},
 		DEXModule: module_dex::{Pallet, Storage, Call, Event<T>, Config<T>},
@@ -362,7 +357,7 @@ impl StableAsset for MockStableAsset {
 		_dx: Self::Balance,
 		_min_dy: Self::Balance,
 		_asset_length: u32,
-	) -> DispatchResult {
+	) -> sp_std::result::Result<(Self::Balance, Self::Balance), DispatchError> {
 		unimplemented!()
 	}
 
@@ -519,5 +514,31 @@ impl StableAsset for MockStableAsset {
 			total_supply: 0,
 			redeem_amount: 0,
 		})
+	}
+
+	fn get_best_route(
+		_input_asset: Self::AssetId,
+		_output_asset: Self::AssetId,
+		_input_amount: Self::Balance,
+	) -> Option<(StableAssetPoolId, PoolTokenIndex, PoolTokenIndex, Self::Balance)> {
+		unimplemented!()
+	}
+
+	fn get_swap_output_amount(
+		_pool_id: StableAssetPoolId,
+		_input_index: PoolTokenIndex,
+		_output_index: PoolTokenIndex,
+		_dx_bal: Self::Balance,
+	) -> Option<SwapResult<Self::Balance>> {
+		unimplemented!()
+	}
+
+	fn get_swap_input_amount(
+		_pool_id: StableAssetPoolId,
+		_input_index: PoolTokenIndex,
+		_output_index: PoolTokenIndex,
+		_dy_bal: Self::Balance,
+	) -> Option<SwapResult<Self::Balance>> {
+		unimplemented!()
 	}
 }

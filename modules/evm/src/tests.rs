@@ -166,7 +166,7 @@ fn should_create_and_call_contract() {
 			})
 		}));
 
-		assert_eq!(ContractStorageSizes::<Runtime>::get(&contract_address), code_size + NewContractExtraBytes::get());
+		assert_eq!(ContractStorageSizes::<Runtime>::get(&contract_address), code_size + NEW_CONTRACT_EXTRA_BYTES);
 		assert_eq!(CodeInfos::<Runtime>::get(&code_hash), Some(CodeInfo {
 			code_size,
 			ref_count: 1,
@@ -842,13 +842,15 @@ fn create_predeploy_contract_works() {
 
 		assert_eq!(Pallet::<Runtime>::is_account_empty(&addr), false);
 
-		System::assert_last_event(Event::EVM(crate::Event::Created {
+		System::assert_has_event(Event::EVM(crate::Event::Created {
 			from: NetworkContractSource::get(),
 			contract: addr,
 			logs: vec![],
 			used_gas: 93183,
 			used_storage: 284,
 		}));
+
+		System::assert_last_event(Event::EVM(crate::Event::ContractPublished { contract: addr }));
 
 		assert_noop!(
 			EVM::create_predeploy_contract(
@@ -865,15 +867,18 @@ fn create_predeploy_contract_works() {
 
 		// deploy empty contract
 		let token_addr = H160::from_str("2222222222222222222222222222222222222222").unwrap();
-		assert_ok!(EVM::create_predeploy_contract(
-			Origin::signed(NetworkContractAccount::get()),
-			token_addr,
-			vec![],
-			0,
-			1000000,
-			1000000,
-			vec![],
-		));
+		assert_noop!(
+			EVM::create_predeploy_contract(
+				Origin::signed(NetworkContractAccount::get()),
+				token_addr,
+				vec![],
+				0,
+				1000000,
+				1000000,
+				vec![],
+			),
+			Error::<Runtime>::ContractNotFound
+		);
 
 		assert_eq!(CodeInfos::<Runtime>::get(&EVM::code_hash_at_address(&token_addr)), None);
 	});
@@ -1048,8 +1053,8 @@ fn should_publish() {
 		let code_size = Accounts::<Runtime>::get(contract_address).map_or(0, |account_info| -> u32 {
 			account_info.contract_info.map_or(0, |contract_info| CodeInfos::<Runtime>::get(contract_info.code_hash).map_or(0, |code_info| code_info.code_size))
 		});
-		assert_eq!(balance(alice()), INITIAL_BALANCE - PublicationFee::get() - ((NewContractExtraBytes::get() + code_size) as u128* EVM::get_storage_deposit_per_byte()));
-		assert_eq!(Balances::free_balance(TreasuryAccount::get()), INITIAL_BALANCE + PublicationFee::get());
+		assert_eq!(balance(alice()), INITIAL_BALANCE - PUBLICATION_FEE - ((NEW_CONTRACT_EXTRA_BYTES + code_size) as u128* EVM::get_storage_deposit_per_byte()));
+		assert_eq!(Balances::free_balance(TreasuryAccount::get()), INITIAL_BALANCE + PUBLICATION_FEE);
 
 		// call method `multiply` will work
 		assert_ok!(<Runtime as Config>::Runner::call(
@@ -1142,8 +1147,8 @@ fn should_enable_contract_development() {
 		let alice_account_id = <Runtime as Config>::AddressMapping::get_account_id(&alice());
 		assert_eq!(reserved_balance(alice()), 0);
 		assert_ok!(EVM::enable_contract_development(Origin::signed(alice_account_id)));
-		assert_eq!(reserved_balance(alice()), DeveloperDeposit::get());
-		assert_eq!(balance(alice()), INITIAL_BALANCE - DeveloperDeposit::get());
+		assert_eq!(reserved_balance(alice()), DEVELOPER_DEPOSIT);
+		assert_eq!(balance(alice()), INITIAL_BALANCE - DEVELOPER_DEPOSIT);
 	});
 }
 
@@ -1164,10 +1169,10 @@ fn should_disable_contract_development() {
 		assert_ok!(EVM::enable_contract_development(Origin::signed(
 			alice_account_id.clone()
 		)));
-		assert_eq!(reserved_balance(alice()), DeveloperDeposit::get());
+		assert_eq!(reserved_balance(alice()), DEVELOPER_DEPOSIT);
 
 		// deposit reserved
-		assert_eq!(balance(alice()), INITIAL_BALANCE - DeveloperDeposit::get());
+		assert_eq!(balance(alice()), INITIAL_BALANCE - DEVELOPER_DEPOSIT);
 
 		// disable contract development
 		assert_ok!(EVM::disable_contract_development(Origin::signed(
@@ -1373,7 +1378,7 @@ fn should_selfdestruct() {
 
 		assert_eq!(
 			ContractStorageSizes::<Runtime>::get(&contract_address),
-			code_size + NewContractExtraBytes::get() + STORAGE_SIZE
+			code_size + NEW_CONTRACT_EXTRA_BYTES + STORAGE_SIZE
 		);
 		assert_eq!(
 			CodeInfos::<Runtime>::get(&code_hash),
@@ -1402,12 +1407,11 @@ fn should_selfdestruct() {
 
 		assert_eq!(balance(alice()), alice_balance);
 		assert_eq!(balance(contract_address), 1000);
-		assert_eq!(
-			reserved_balance(contract_address),
-			287 * EVM::get_storage_deposit_per_byte()
-		);
 
-		// can't publish at the same address until everything is wiped out
+		let reserved_amount = 287 * EVM::get_storage_deposit_per_byte();
+		assert_eq!(reserved_balance(contract_address), reserved_amount);
+
+		// can't publish at the same address
 		assert_noop!(
 			EVM::create_predeploy_contract(
 				Origin::signed(NetworkContractAccount::get()),
@@ -1430,24 +1434,14 @@ fn should_selfdestruct() {
 		IdleScheduler::on_idle(0, 1_000_000_000_000);
 
 		// refund storage deposit
-		assert_eq!(balance(alice()), alice_balance + 3870);
+		assert_eq!(balance(alice()), alice_balance + amount + reserved_amount);
 		assert_eq!(balance(contract_address), 0);
 		assert_eq!(reserved_balance(contract_address), 0);
 
 		assert_eq!(System::providers(&contract_account_id), 0);
 		assert!(!System::account_exists(&contract_account_id));
-		assert!(!Accounts::<Runtime>::contains_key(&contract_address));
+		assert!(Accounts::<Runtime>::contains_key(&contract_address));
 		assert_eq!(AccountStorages::<Runtime>::iter_prefix(&contract_address).count(), 0);
-
-		assert_ok!(EVM::create_predeploy_contract(
-			Origin::signed(NetworkContractAccount::get()),
-			contract_address,
-			vec![0x01],
-			0,
-			1000000,
-			1000000,
-			vec![],
-		));
 	});
 }
 
@@ -1547,7 +1541,11 @@ fn storage_limit_should_work() {
 		)
 		.unwrap();
 		assert_eq!(result.exit_reason, ExitReason::Succeed(ExitSucceed::Stopped));
-		assert_eq!(result.used_storage, 290);
+
+		// code_size + array_update(2 items) + extra_size = 290, array_length is already set
+		let expected_used_storage = 62 + 2 * 64 + 100;
+		assert_eq!(expected_used_storage, 290);
+		assert_eq!(result.used_storage, expected_used_storage);
 
 		// Factory.createContract(2)
 		let amount = 1000000000;
@@ -1560,7 +1558,7 @@ fn storage_limit_should_work() {
 				create_contract,
 				amount,
 				1000000000,
-				127,
+				451,
 				vec![],
 			),
 			Ok(PostDispatchInfo {
@@ -1591,13 +1589,18 @@ fn storage_limit_should_work() {
 			create_contract,
 			amount,
 			1000000000,
-			1000000000,
+			452,
 			vec![],
 			<Runtime as Config>::config(),
 		)
 		.unwrap();
 		assert_eq!(result.exit_reason, ExitReason::Succeed(ExitSucceed::Stopped));
-		assert_eq!(result.used_storage, 580);
+
+		// 2 * code_size + array_update(2 items) + extra_size = 452, array_length is already set
+		let expected_used_storage = 2 * 62 + 2 * 64 + 2 * 100;
+
+		assert_eq!(expected_used_storage, 452);
+		assert_eq!(result.used_storage, expected_used_storage);
 	});
 }
 
@@ -1635,7 +1638,14 @@ fn evm_execute_mode_should_work() {
 		)
 		.unwrap();
 		assert_eq!(result.exit_reason, ExitReason::Succeed(ExitSucceed::Returned));
-		assert_eq!(result.used_storage, 516);
+
+		let account = Accounts::<Runtime>::get(&result.value).unwrap();
+		let code_info = CodeInfos::<Runtime>::get(account.contract_info.unwrap().code_hash).unwrap();
+
+		// code_size + extra_size = 516
+		let expected_used_storage = 416 + 100;
+		assert_eq!(code_info.code_size, 416);
+		assert_eq!(result.used_storage, expected_used_storage);
 		assert_eq!(balance(alice()), alice_balance);
 		let factory_contract_address = result.value;
 
@@ -1661,13 +1671,16 @@ fn evm_execute_mode_should_work() {
 			ExecutionMode::EstimateGas,
 		)
 		.unwrap();
+		// code_size + array_update(1 item + length) + extra_size = 290
+		let expected_used_storage = 62 + 2 * 64 + 100;
+		assert_eq!(expected_used_storage, 290);
 		assert_eq!(
 			result,
 			CallInfo {
 				exit_reason: ExitReason::Succeed(ExitSucceed::Stopped),
 				value: vec![],
 				used_gas: U256::from(142_445),
-				used_storage: 290,
+				used_storage: expected_used_storage,
 				logs: vec![]
 			}
 		);
@@ -1684,17 +1697,37 @@ fn evm_execute_mode_should_work() {
 			ExecutionMode::EstimateGas,
 		)
 		.unwrap();
+
+		// 2 * code_size + array_update(2 items + length) + extra_size = 516
+		let expected_used_storage = 2 * 62 + 3 * 64 + 2 * 100;
+		assert_eq!(expected_used_storage, 516);
 		assert_eq!(
 			result,
 			CallInfo {
 				exit_reason: ExitReason::Succeed(ExitSucceed::Stopped),
 				value: vec![],
 				used_gas: U256::from(259_561),
-				used_storage: 580,
+				used_storage: expected_used_storage,
 				logs: vec![]
 			}
 		);
 		assert_eq!(balance(alice()), alice_balance);
+
+		let code_hash = Accounts::<Runtime>::get(&factory_contract_address)
+			.unwrap()
+			.contract_info
+			.unwrap()
+			.code_hash;
+
+		let contract_storage_size = ContractStorageSizes::<Runtime>::get(&factory_contract_address);
+		let storage_count = AccountStorages::<Runtime>::iter_prefix(&factory_contract_address).count() as u32;
+		let code_info = CodeInfos::<Runtime>::get(&code_hash).unwrap();
+		assert_eq!(code_info.code_size, 416);
+		assert_eq!(
+			contract_storage_size,
+			NEW_CONTRACT_EXTRA_BYTES + code_info.code_size + storage_count * 64
+		);
+		assert_eq!(storage_count, 0);
 
 		// ExecutionMode::Execute
 		// Factory.createContract(1)
@@ -1724,18 +1757,33 @@ fn evm_execute_mode_should_work() {
 			ExecutionMode::Execute,
 		)
 		.unwrap();
+
+		// code_size + array_update(1 item + length) + extra_size = 290
+		let expected_used_storage = 62 + 2 * 64 + 100;
+		assert_eq!(expected_used_storage, 290);
 		assert_eq!(
 			result,
 			CallInfo {
 				exit_reason: ExitReason::Succeed(ExitSucceed::Stopped),
 				value: vec![],
 				used_gas: U256::from(110_469),
-				used_storage: 290,
+				used_storage: expected_used_storage,
 				logs: vec![]
 			}
 		);
 
-		alice_balance -= 290 * EVM::get_storage_deposit_per_byte();
+		let contract_storage_size = ContractStorageSizes::<Runtime>::get(&factory_contract_address);
+		let storage_count = AccountStorages::<Runtime>::iter_prefix(&factory_contract_address).count() as u32;
+		let code_info = CodeInfos::<Runtime>::get(&code_hash).unwrap();
+		assert_eq!(code_info.code_size, 416);
+		assert_eq!(
+			contract_storage_size,
+			NEW_CONTRACT_EXTRA_BYTES + code_info.code_size + storage_count * 64
+		);
+		// one address stored in array + array_length
+		assert_eq!(storage_count, 2);
+
+		alice_balance -= expected_used_storage as u128 * EVM::get_storage_deposit_per_byte();
 
 		assert_eq!(balance(alice()), alice_balance);
 
@@ -1752,13 +1800,17 @@ fn evm_execute_mode_should_work() {
 			ExecutionMode::View,
 		)
 		.unwrap();
+
+		// code_size + array_update(1 item) + extra_size = 226, array_length is already set
+		let expected_used_storage = 62 + 64 + 100;
+		assert_eq!(expected_used_storage, 226);
 		assert_eq!(
 			result,
 			CallInfo {
 				exit_reason: ExitReason::Succeed(ExitSucceed::Stopped),
 				value: vec![],
 				used_gas: U256::from(93_369),
-				used_storage: 290,
+				used_storage: expected_used_storage,
 				logs: vec![]
 			}
 		);
@@ -1804,7 +1856,7 @@ fn should_update_storage() {
 
 		let code_size = 340u32;
 
-		let mut used_storage = code_size + NewContractExtraBytes::get() + STORAGE_SIZE;
+		let mut used_storage = code_size + NEW_CONTRACT_EXTRA_BYTES + STORAGE_SIZE;
 
 		assert_eq!(result.used_storage, used_storage as i32);
 
@@ -1814,10 +1866,10 @@ fn should_update_storage() {
 		publish_free(contract_address);
 
 		// call method `set(123)`
-		let alice_account_id = <Runtime as Config>::AddressMapping::get_account_id(&alice());
+		let bob_account_id = <Runtime as Config>::AddressMapping::get_account_id(&bob());
 		assert_eq!(
 			EVM::call(
-				Origin::signed(alice_account_id),
+				Origin::signed(bob_account_id),
 				contract_address,
 				from_hex("0x60fe47b1000000000000000000000000000000000000000000000000000000000000007b").unwrap(),
 				0,
@@ -1831,7 +1883,7 @@ fn should_update_storage() {
 			})
 		);
 		System::assert_last_event(Event::EVM(crate::Event::ExecutedFailed {
-			from: alice(),
+			from: bob(),
 			contract: contract_address,
 			exit_reason: ExitReason::Error(ExitError::Other(
 				Into::<&str>::into(Error::<Runtime>::OutOfStorage).into(),
@@ -2026,5 +2078,207 @@ fn remove_account_works() {
 		);
 		assert_ok!(Pallet::<Runtime>::remove_account(&address));
 		assert_eq!(Accounts::<Runtime>::contains_key(&address), false);
+	});
+}
+
+#[test]
+fn auto_publish_works() {
+	let json: serde_json::Value =
+		serde_json::from_str(include_str!("../../../ts-tests/build/CreateContractFactory.json")).unwrap();
+	let code = hex::decode(json.get("bytecode").unwrap().as_str().unwrap()).unwrap();
+
+	new_test_ext().execute_with(|| {
+		let alice_account_id = <Runtime as Config>::AddressMapping::get_account_id(&alice());
+		assert_ok!(EVM::create(
+			Origin::signed(alice_account_id.clone()),
+			code,
+			0,
+			2_100_000,
+			10000,
+			vec![]
+		));
+
+		let factory = H160::from_str("0x5f8bd49cd9f0cb2bd5bb9d4320dfe9b61023249d").unwrap();
+		System::assert_last_event(Event::EVM(crate::Event::Created {
+			from: alice(),
+			contract: factory,
+			logs: vec![],
+			used_gas: 593209,
+			used_storage: 2609,
+		}));
+
+		// call method `createContract()`
+		assert_ok!(EVM::call(
+			Origin::signed(alice_account_id.clone()),
+			factory,
+			from_hex("0x412a5a6d").unwrap(),
+			0,
+			1000000,
+			10000,
+			vec![],
+		));
+		System::assert_last_event(Event::EVM(crate::Event::Executed {
+			from: alice(),
+			contract: factory,
+			logs: vec![
+				crate::Log {
+					address: H160::from_str("0x7b8f8ca099f6e33cf1817cf67d0556429cfc54e4").unwrap(),
+					topics: vec![
+						H256::from_str("0xb0199510a4d57fac89f9b613861450ae948394f2abe3bf9918eb3c6890243f00").unwrap(),
+						H256::from_str("0x00000000000000000000000030f612c54706d40f65acaf10b8f6989103c2af58").unwrap(),
+					],
+					data: vec![],
+				},
+				crate::Log {
+					address: factory,
+					topics: vec![
+						H256::from_str("0x6837ff1e738d95fc8bb5f12ce1513f42866f6c59c226c77342c4f36a1958ea10").unwrap(),
+						H256::from_str("0x0000000000000000000000007b8f8ca099f6e33cf1817cf67d0556429cfc54e4").unwrap(),
+					],
+					data: vec![],
+				},
+			],
+			used_gas: 387664,
+			used_storage: 1530,
+		}));
+
+		assert_eq!(
+			EVM::accounts(factory).unwrap().contract_info,
+			Some(ContractInfo {
+				code_hash: H256::from_str("0xd007bd109daec7dec73d897c079b67b3d2fd6ad4892a916c5e03e21bb60ff384")
+					.unwrap(),
+				maintainer: alice(),
+				published: false
+			})
+		);
+		assert_eq!(
+			EVM::accounts(H160::from_str("0x7b8f8ca099f6e33cf1817cf67d0556429cfc54e4").unwrap())
+				.unwrap()
+				.contract_info,
+			Some(ContractInfo {
+				code_hash: H256::from_str("0xe12fa7753d9cd8de1f8b597fef33ab91c2749fe4a1022b648f949ab2566f391f")
+					.unwrap(),
+				maintainer: factory,
+				published: false
+			})
+		);
+		assert_eq!(
+			EVM::accounts(H160::from_str("0x30f612c54706d40f65acaf10b8f6989103c2af58").unwrap())
+				.unwrap()
+				.contract_info,
+			Some(ContractInfo {
+				code_hash: H256::from_str("0x46460b564756d0e02bbfdc8fc3d47d1a68c3b3d8301b5de90da83d6d75e0b6c7")
+					.unwrap(),
+				maintainer: H160::from_str("0x7b8f8ca099f6e33cf1817cf67d0556429cfc54e4").unwrap(),
+				published: false
+			})
+		);
+
+		// publish the factory
+		assert_ok!(EVM::publish_free(Origin::signed(CouncilAccount::get()), factory));
+
+		// call method `createContract()`
+		assert_ok!(EVM::call(
+			Origin::signed(alice_account_id.clone()),
+			factory,
+			from_hex("0x412a5a6d").unwrap(),
+			0,
+			1000000,
+			10000,
+			vec![],
+		));
+		System::assert_last_event(Event::EVM(crate::Event::Executed {
+			from: alice(),
+			contract: factory,
+			logs: vec![
+				crate::Log {
+					address: H160::from_str("0x39b26a36a8a175ce7d498b5ef187d1ab2f381bbd").unwrap(),
+					topics: vec![
+						H256::from_str("0xb0199510a4d57fac89f9b613861450ae948394f2abe3bf9918eb3c6890243f00").unwrap(),
+						H256::from_str("0x000000000000000000000000769a55efaf4dbdd6f44efce668455522b61abb82").unwrap(),
+					],
+					data: vec![],
+				},
+				crate::Log {
+					address: factory,
+					topics: vec![
+						H256::from_str("0x6837ff1e738d95fc8bb5f12ce1513f42866f6c59c226c77342c4f36a1958ea10").unwrap(),
+						H256::from_str("0x00000000000000000000000039b26a36a8a175ce7d498b5ef187d1ab2f381bbd").unwrap(),
+					],
+					data: vec![],
+				},
+			],
+			used_gas: 370564,
+			used_storage: 1466,
+		}));
+
+		assert_eq!(
+			EVM::accounts(factory).unwrap().contract_info,
+			Some(ContractInfo {
+				code_hash: H256::from_str("0xd007bd109daec7dec73d897c079b67b3d2fd6ad4892a916c5e03e21bb60ff384")
+					.unwrap(),
+				maintainer: alice(),
+				published: true
+			})
+		);
+		assert_eq!(
+			EVM::accounts(H160::from_str("0x39b26a36a8a175ce7d498b5ef187d1ab2f381bbd").unwrap())
+				.unwrap()
+				.contract_info,
+			Some(ContractInfo {
+				code_hash: H256::from_str("0xe12fa7753d9cd8de1f8b597fef33ab91c2749fe4a1022b648f949ab2566f391f")
+					.unwrap(),
+				maintainer: H160::from_str("0x5f8bd49cd9f0cb2bd5bb9d4320dfe9b61023249d").unwrap(),
+				published: true
+			})
+		);
+		assert_eq!(
+			EVM::accounts(H160::from_str("0x769a55efaf4dbdd6f44efce668455522b61abb82").unwrap())
+				.unwrap()
+				.contract_info,
+			Some(ContractInfo {
+				code_hash: H256::from_str("0x46460b564756d0e02bbfdc8fc3d47d1a68c3b3d8301b5de90da83d6d75e0b6c7")
+					.unwrap(),
+				maintainer: H160::from_str("0x39b26a36a8a175ce7d498b5ef187d1ab2f381bbd").unwrap(),
+				published: true
+			})
+		);
+
+		// call method `callContract()`
+		assert_ok!(EVM::call(
+			Origin::signed(alice_account_id.clone()),
+			factory,
+			from_hex("0x0f24df3a").unwrap(),
+			0,
+			1000000,
+			10000,
+			vec![],
+		));
+		System::assert_last_event(Event::EVM(crate::Event::Executed {
+			from: alice(),
+			contract: factory,
+			logs: vec![crate::Log {
+				address: H160::from_str("0x7b8f8ca099f6e33cf1817cf67d0556429cfc54e4").unwrap(),
+				topics: vec![
+					H256::from_str("0xb0199510a4d57fac89f9b613861450ae948394f2abe3bf9918eb3c6890243f00").unwrap(),
+					H256::from_str("0x000000000000000000000000d8a09b53762a01c2beb363d5355f4eecf7b48360").unwrap(),
+				],
+				data: vec![],
+			}],
+			used_gas: 147214,
+			used_storage: 407,
+		}));
+
+		assert_eq!(
+			EVM::accounts(H160::from_str("d8a09b53762a01c2beb363d5355f4eecf7b48360").unwrap())
+				.unwrap()
+				.contract_info,
+			Some(ContractInfo {
+				code_hash: H256::from_str("0x46460b564756d0e02bbfdc8fc3d47d1a68c3b3d8301b5de90da83d6d75e0b6c7")
+					.unwrap(),
+				maintainer: H160::from_str("0x7b8f8ca099f6e33cf1817cf67d0556429cfc54e4").unwrap(),
+				published: true
+			})
+		);
 	});
 }

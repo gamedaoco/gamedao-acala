@@ -23,7 +23,7 @@
 use super::*;
 use frame_support::{
 	construct_runtime, ord_parameter_types, parameter_types,
-	traits::{Everything, Nothing},
+	traits::{ConstU32, ConstU64, Everything, Nothing},
 	PalletId,
 };
 use frame_system::EnsureSignedBy;
@@ -35,8 +35,8 @@ use sp_runtime::{
 	traits::{AccountIdConversion, IdentityLookup, One as OneT},
 };
 use sp_std::cell::RefCell;
-use support::mocks::MockStableAsset;
 pub use support::Price;
+use support::{mocks::MockStableAsset, SpecificJointsSwap};
 
 pub type AccountId = u128;
 pub type BlockNumber = u64;
@@ -54,10 +54,6 @@ mod auction_manager {
 	pub use super::super::*;
 }
 
-parameter_types! {
-	pub const BlockHashCount: u64 = 250;
-}
-
 impl frame_system::Config for Runtime {
 	type Origin = Origin;
 	type Index = u64;
@@ -69,7 +65,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type Version = ();
@@ -82,7 +78,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 parameter_type_with_key! {
@@ -100,7 +96,11 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type DustRemovalWhitelist = Nothing;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 impl orml_auction::Config for Runtime {
@@ -119,7 +119,7 @@ parameter_types! {
 	pub const GetStableCurrencyId: CurrencyId = AUSD;
 	pub const MaxAuctionsCount: u32 = 10_000;
 	pub const CDPTreasuryPalletId: PalletId = PalletId(*b"aca/cdpt");
-	pub TreasuryAccount: AccountId = PalletId(*b"aca/hztr").into_account();
+	pub TreasuryAccount: AccountId = PalletId(*b"aca/hztr").into_account_truncating();
 	pub AlternativeSwapPathJointList: Vec<Vec<CurrencyId>> = vec![
 		vec![DOT],
 	];
@@ -132,10 +132,10 @@ impl cdp_treasury::Config for Runtime {
 	type AuctionManagerHandler = AuctionManagerModule;
 	type UpdateOrigin = EnsureSignedBy<One, AccountId>;
 	type DEX = DEXModule;
+	type Swap = SpecificJointsSwap<DEXModule, AlternativeSwapPathJointList>;
 	type MaxAuctionsCount = MaxAuctionsCount;
 	type PalletId = CDPTreasuryPalletId;
 	type TreasuryAccount = TreasuryAccount;
-	type AlternativeSwapPathJointList = AlternativeSwapPathJointList;
 	type WeightInfo = ();
 	type StableAsset = MockStableAsset<CurrencyId, Balance, AccountId, BlockNumber>;
 }
@@ -163,26 +163,24 @@ impl PriceProvider<CurrencyId> for MockPriceSource {
 parameter_types! {
 	pub const DEXPalletId: PalletId = PalletId(*b"aca/dexm");
 	pub const GetExchangeFee: (u32, u32) = (0, 100);
-	pub const TradingPathLimit: u32 = 4;
 	pub EnabledTradingPairs: Vec<TradingPair> = vec![
 		TradingPair::from_currency_ids(AUSD, BTC).unwrap(),
 		TradingPair::from_currency_ids(DOT, BTC).unwrap(),
 		TradingPair::from_currency_ids(AUSD, DOT).unwrap()
 	];
-	pub const ExtendedProvisioningBlocks: BlockNumber = 0;
 }
 
 impl module_dex::Config for Runtime {
 	type Event = Event;
 	type Currency = Tokens;
 	type GetExchangeFee = GetExchangeFee;
-	type TradingPathLimit = TradingPathLimit;
+	type TradingPathLimit = ConstU32<4>;
 	type PalletId = DEXPalletId;
 	type Erc20InfoMapping = ();
 	type DEXIncentives = ();
 	type WeightInfo = ();
 	type ListingOrigin = EnsureSignedBy<One, AccountId>;
-	type ExtendedProvisioningBlocks = ExtendedProvisioningBlocks;
+	type ExtendedProvisioningBlocks = ConstU64<0>;
 	type OnLiquidityPoolUpdated = ();
 }
 
@@ -203,9 +201,6 @@ impl EmergencyShutdown for MockEmergencyShutdown {
 
 parameter_types! {
 	pub MinimumIncrementSize: Rate = Rate::saturating_from_rational(1, 20);
-	pub const AuctionTimeToClose: u64 = 100;
-	pub const AuctionDurationSoftCap: u64 = 2000;
-	pub const UnsignedPriority: u64 = 1 << 20;
 }
 
 impl Config for Runtime {
@@ -213,12 +208,12 @@ impl Config for Runtime {
 	type Currency = Tokens;
 	type Auction = AuctionModule;
 	type MinimumIncrementSize = MinimumIncrementSize;
-	type AuctionTimeToClose = AuctionTimeToClose;
-	type AuctionDurationSoftCap = AuctionDurationSoftCap;
+	type AuctionTimeToClose = ConstU64<100>;
+	type AuctionDurationSoftCap = ConstU64<2000>;
 	type GetStableCurrencyId = GetStableCurrencyId;
 	type CDPTreasury = CDPTreasuryModule;
 	type PriceSource = MockPriceSource;
-	type UnsignedPriority = UnsignedPriority;
+	type UnsignedPriority = ConstU64<1048576>; // 1 << 20
 	type EmergencyShutdown = MockEmergencyShutdown;
 	type WeightInfo = ();
 }

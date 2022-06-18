@@ -16,8 +16,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use super::input::{Input, InputT, Output};
-use crate::{precompile::input::InputPricer, WeightToGas};
+use super::{
+	input::{Input, InputPricer, InputT, Output},
+	target_gas_limit,
+};
+use crate::WeightToGas;
 use frame_support::{
 	log,
 	traits::{Currency, Get},
@@ -70,13 +73,13 @@ where
 			Runtime::AccountId,
 			<Runtime as module_evm::Config>::AddressMapping,
 			Runtime::Erc20InfoMapping,
-		>::new(input, target_gas);
+		>::new(input, target_gas_limit(target_gas));
 
 		let currency_id =
 			Runtime::Erc20InfoMapping::decode_evm_address(context.caller).ok_or_else(|| PrecompileFailure::Revert {
 				exit_status: ExitRevert::Reverted,
 				output: "invalid currency id".into(),
-				cost: target_gas.unwrap_or_default(),
+				cost: target_gas_limit(target_gas).unwrap_or_default(),
 			})?;
 
 		let gas_cost = Pricer::<Runtime>::cost(&input, currency_id)?;
@@ -98,14 +101,14 @@ where
 				let name = Runtime::Erc20InfoMapping::name(currency_id).ok_or_else(|| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "Get name failed".into(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 				log::debug!(target: "evm", "multicurrency: name: {:?}", name);
 
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: gas_cost,
-					output: Output::default().encode_bytes(&name),
+					output: Output::encode_bytes(&name),
 					logs: Default::default(),
 				})
 			}
@@ -114,14 +117,14 @@ where
 					Runtime::Erc20InfoMapping::symbol(currency_id).ok_or_else(|| PrecompileFailure::Revert {
 						exit_status: ExitRevert::Reverted,
 						output: "Get symbol failed".into(),
-						cost: target_gas.unwrap_or_default(),
+						cost: target_gas_limit(target_gas).unwrap_or_default(),
 					})?;
 				log::debug!(target: "evm", "multicurrency: symbol: {:?}", symbol);
 
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: gas_cost,
-					output: Output::default().encode_bytes(&symbol),
+					output: Output::encode_bytes(&symbol),
 					logs: Default::default(),
 				})
 			}
@@ -130,14 +133,14 @@ where
 					Runtime::Erc20InfoMapping::decimals(currency_id).ok_or_else(|| PrecompileFailure::Revert {
 						exit_status: ExitRevert::Reverted,
 						output: "Get decimals failed".into(),
-						cost: target_gas.unwrap_or_default(),
+						cost: target_gas_limit(target_gas).unwrap_or_default(),
 					})?;
 				log::debug!(target: "evm", "multicurrency: decimals: {:?}", decimals);
 
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: gas_cost,
-					output: Output::default().encode_u8(decimals),
+					output: Output::encode_uint(decimals),
 					logs: Default::default(),
 				})
 			}
@@ -149,7 +152,7 @@ where
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: gas_cost,
-					output: Output::default().encode_u128(total_issuance),
+					output: Output::encode_uint(total_issuance),
 					logs: Default::default(),
 				})
 			}
@@ -166,7 +169,7 @@ where
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: gas_cost,
-					output: Output::default().encode_u128(balance),
+					output: Output::encode_uint(balance),
 					logs: Default::default(),
 				})
 			}
@@ -185,7 +188,7 @@ where
 				.map_err(|e| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: Into::<&str>::into(e).as_bytes().to_vec(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 
 				Ok(PrecompileOutput {
@@ -306,7 +309,7 @@ mod tests {
 				PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "invalid currency id".into(),
-					cost: 10_000,
+					cost: target_gas_limit(Some(10_000)).unwrap(),
 				}
 			);
 		});
@@ -447,9 +450,9 @@ mod tests {
 			// Token
 			context.caller = ausd_evm_address();
 
-			// 1_000_000_000
+			// 2_000_000_000
 			let expected_output = hex! {"
-				00000000000000000000000000000000 0000000000000000000000003b9aca00
+				00000000000000000000000000000000 00000000000000000000000077359400
 			"};
 
 			let resp = MultiCurrencyPrecompile::execute(&input, None, &context, false).unwrap();
@@ -550,7 +553,7 @@ mod tests {
 				PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "BalanceTooLow".into(),
-					cost: 100_000,
+					cost: target_gas_limit(Some(100_000)).unwrap(),
 				}
 			);
 		})

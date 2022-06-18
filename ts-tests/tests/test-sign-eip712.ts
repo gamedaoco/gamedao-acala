@@ -1,6 +1,6 @@
 import { expect } from "chai";
 
-import { describeWithAcala, getEvmNonce } from "./util";
+import { describeWithAcala, getEvmNonce, transfer } from "./util";
 import { Signer } from "@acala-network/bodhi";
 import { Wallet } from "@ethersproject/wallet";
 import { encodeAddress } from "@polkadot/keyring";
@@ -33,8 +33,7 @@ describeWithAcala("Acala RPC (Sign eip712)", (context) => {
 
 		expect(subAddr).to.equal("5EMjsczQH4R2WZaB5Svau8HWZp1aAfMqjxfv3GeLWotYSkLc");
 
-		await context.provider.api.tx.balances.transfer(subAddr, "10000000000000")
-			.signAndSend(await alice.getSubstrateAddress());
+		await transfer(context, await alice.getSubstrateAddress(), subAddr, 10000000000000);
 
 		factory = new ethers.ContractFactory(Erc20DemoContract.abi, Erc20DemoContract.bytecode);
 	});
@@ -45,7 +44,7 @@ describeWithAcala("Acala RPC (Sign eip712)", (context) => {
 		const domain = {
 			name: "Acala EVM",
 			version: "1",
-			chainId: +context.provider.api.consts.evm.chainId.toString(),
+			chainId: +context.provider.api.consts.evmAccounts.chainId.toString(),
 			salt: (await context.provider.api.rpc.chain.getBlockHash(0)).toHex(),
 		};
 
@@ -179,7 +178,7 @@ describeWithAcala("Acala RPC (Sign eip712)", (context) => {
 		const domain = {
 			name: "Acala EVM",
 			version: "1",
-			chainId: +context.provider.api.consts.evm.chainId.toString(),
+			chainId: +context.provider.api.consts.evmAccounts.chainId.toString(),
 			salt: (await context.provider.api.rpc.chain.getBlockHash(0)).toHex(),
 		};
 

@@ -17,15 +17,18 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{
-	AccountId, Address, Amount, Balance, CdpEngine, CdpTreasury, CollateralCurrencyIds, CurrencyId,
-	DefaultDebitExchangeRate, Dex, EmergencyShutdown, ExistentialDeposits, GetLiquidCurrencyId, GetNativeCurrencyId,
-	GetStableCurrencyId, GetStakingCurrencyId, MaxAuctionsCount, MinimumDebitValue, NativeTokenExistentialDeposit,
-	Price, Rate, Ratio, Runtime, Timestamp, MILLISECS_PER_BLOCK,
+	AccountId, Address, Amount, Balance, CdpEngine, CdpTreasury, CurrencyId, DefaultDebitExchangeRate, Dex,
+	EmergencyShutdown, ExistentialDeposits, GetLiquidCurrencyId, GetNativeCurrencyId, GetStableCurrencyId,
+	GetStakingCurrencyId, MinimumDebitValue, NativeTokenExistentialDeposit, Price, Rate, Ratio, Runtime, Timestamp,
+	MILLISECS_PER_BLOCK,
 };
 
-use super::utils::{dollar, feed_price, set_balance};
+use super::{
+	get_benchmarking_collateral_currency_ids,
+	utils::{dollar, feed_price, set_balance},
+};
 use frame_benchmarking::account;
-use frame_support::traits::OnInitialize;
+use frame_support::traits::{Get, OnInitialize};
 use frame_system::RawOrigin;
 use module_support::DEXManager;
 use orml_benchmarking::runtime_benchmarks;
@@ -72,10 +75,10 @@ runtime_benchmarks! {
 	{ Runtime, module_cdp_engine }
 
 	on_initialize {
-		let c in 0 .. CollateralCurrencyIds::get().len() as u32;
+		let c in 0 .. get_benchmarking_collateral_currency_ids().len() as u32;
 		let owner: AccountId = account("owner", 0, SEED);
 		let owner_lookup: Address = AccountIdLookup::unlookup(owner.clone());
-		let currency_ids = CollateralCurrencyIds::get();
+		let currency_ids = get_benchmarking_collateral_currency_ids();
 		let min_debit_value = MinimumDebitValue::get();
 		let debit_exchange_rate = DefaultDebitExchangeRate::get();
 		let min_debit_amount = debit_exchange_rate.reciprocal().unwrap().saturating_mul_int(min_debit_value);
@@ -139,12 +142,9 @@ runtime_benchmarks! {
 		Change::NewValue(100_000 * dollar(STABLECOIN))
 	)
 
-	set_global_params {
-	}: _(RawOrigin::Root, Rate::saturating_from_rational(1, 1000000))
-
 	// `liquidate` by_auction
 	liquidate_by_auction {
-		let b in 1 .. MaxAuctionsCount::get();
+		let b in 1 .. <Runtime as module_cdp_treasury::Config>::MaxAuctionsCount::get();
 
 		let owner: AccountId = account("owner", 0, SEED);
 		let owner_lookup = AccountIdLookup::unlookup(owner.clone());
@@ -256,7 +256,7 @@ runtime_benchmarks! {
 		let min_debit_amount = debit_exchange_rate.reciprocal().unwrap().saturating_mul_int(min_debit_value);
 		let min_debit_amount: Amount = min_debit_amount.unique_saturated_into();
 		let collateral_value = 2 * min_debit_value;
-		let collateral_amount = Price::saturating_from_rational(dollar(STAKING), dollar(STABLECOIN)).saturating_mul_int(collateral_value);
+		let collateral_amount = Price::saturating_from_rational(1_000 * dollar(STAKING), 1000 * dollar(STABLECOIN)).saturating_mul_int(collateral_value);
 
 		// set balance
 		set_balance(STAKING, &owner, collateral_amount + ExistentialDeposits::get(&STAKING));

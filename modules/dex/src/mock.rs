@@ -23,7 +23,7 @@
 use super::*;
 use frame_support::{
 	construct_runtime, ord_parameter_types, parameter_types,
-	traits::{Everything, Nothing},
+	traits::{ConstU32, ConstU64, Everything, Nothing},
 };
 use frame_system::EnsureSignedBy;
 use orml_traits::{parameter_type_with_key, MultiReservableCurrency};
@@ -31,13 +31,14 @@ use primitives::{Amount, TokenSymbol};
 use sp_core::H256;
 use sp_runtime::{testing::Header, traits::IdentityLookup};
 use sp_std::cell::RefCell;
-use support::mocks::MockErc20InfoMapping;
+use support::{mocks::MockErc20InfoMapping, SpecificJointsSwap};
 
 pub type BlockNumber = u64;
 pub type AccountId = u128;
 
 pub const ALICE: AccountId = 1;
 pub const BOB: AccountId = 2;
+pub const CAROL: AccountId = 3;
 pub const AUSD: CurrencyId = CurrencyId::Token(TokenSymbol::AUSD);
 pub const BTC: CurrencyId = CurrencyId::Token(TokenSymbol::RENBTC);
 pub const DOT: CurrencyId = CurrencyId::Token(TokenSymbol::DOT);
@@ -53,10 +54,6 @@ mod dex {
 	pub use super::super::*;
 }
 
-parameter_types! {
-	pub const BlockHashCount: BlockNumber = 250;
-}
-
 impl frame_system::Config for Runtime {
 	type Origin = Origin;
 	type Index = u64;
@@ -68,7 +65,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type Version = ();
@@ -81,7 +78,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 parameter_type_with_key! {
@@ -99,7 +96,11 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type DustRemovalWhitelist = Nothing;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 pub struct MockDEXIncentives;
@@ -120,9 +121,10 @@ ord_parameter_types! {
 
 parameter_types! {
 	pub const GetExchangeFee: (u32, u32) = (1, 100);
-	pub const TradingPathLimit: u32 = 3;
 	pub const DEXPalletId: PalletId = PalletId(*b"aca/dexm");
-	pub const ExtendedProvisioningBlocks: BlockNumber = 2000;
+	pub AlternativeSwapPathJointList: Vec<Vec<CurrencyId>> = vec![
+		vec![DOT],
+	];
 }
 
 thread_local! {
@@ -143,15 +145,23 @@ impl Config for Runtime {
 	type Event = Event;
 	type Currency = Tokens;
 	type GetExchangeFee = GetExchangeFee;
-	type TradingPathLimit = TradingPathLimit;
+	type TradingPathLimit = ConstU32<3>;
 	type PalletId = DEXPalletId;
 	type Erc20InfoMapping = MockErc20InfoMapping;
 	type WeightInfo = ();
 	type DEXIncentives = MockDEXIncentives;
 	type ListingOrigin = EnsureSignedBy<ListingOrigin, AccountId>;
-	type ExtendedProvisioningBlocks = ExtendedProvisioningBlocks;
+	type ExtendedProvisioningBlocks = ConstU64<2000>;
 	type OnLiquidityPoolUpdated = MockOnLiquidityPoolUpdated;
 }
+
+parameter_types! {
+	pub AUSDJoint: Vec<Vec<CurrencyId>> = vec![vec![AUSD]];
+	pub ACAJoint: Vec<Vec<CurrencyId>> = vec![vec![ACA]];
+}
+
+pub type AUSDJointSwap = SpecificJointsSwap<DexModule, AUSDJoint>;
+pub type ACAJointSwap = SpecificJointsSwap<DexModule, ACAJoint>;
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Runtime>;
 type Block = frame_system::mocking::MockBlock<Runtime>;
@@ -179,6 +189,8 @@ impl Default for ExtBuilder {
 	fn default() -> Self {
 		Self {
 			balances: vec![
+				(ALICE, ACA, 1_000_000_000_000_000_000u128),
+				(BOB, ACA, 1_000_000_000_000_000_000u128),
 				(ALICE, AUSD, 1_000_000_000_000_000_000u128),
 				(BOB, AUSD, 1_000_000_000_000_000_000u128),
 				(ALICE, BTC, 1_000_000_000_000_000_000u128),

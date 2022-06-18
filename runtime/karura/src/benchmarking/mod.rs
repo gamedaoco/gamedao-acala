@@ -18,7 +18,12 @@
 
 #![cfg(feature = "runtime-benchmarks")]
 
-pub mod utils;
+use super::{CurrencyId, KAR, KSM, LKSM};
+use sp_std::prelude::*;
+
+pub mod utils {
+	include!("../../../mandala/src/benchmarking/utils.rs");
+}
 
 // module benchmarking
 pub mod asset_registry {
@@ -60,6 +65,9 @@ pub mod homa {
 pub mod honzon {
 	include!("../../../mandala/src/benchmarking/honzon.rs");
 }
+pub mod idle_scheduler {
+	include!("../../../mandala/src/benchmarking/idle_scheduler.rs");
+}
 pub mod incentives {
 	include!("../../../mandala/src/benchmarking/incentives.rs");
 }
@@ -99,4 +107,8 @@ pub mod honzon_bridge;
 
 pub fn get_vesting_account() -> super::AccountId {
 	super::KaruraFoundationAccounts::get()[0].clone()
+}
+
+pub fn get_benchmarking_collateral_currency_ids() -> Vec<CurrencyId> {
+	vec![KSM, LKSM, KAR, CurrencyId::StableAssetPoolToken(0)]
 }

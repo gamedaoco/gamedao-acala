@@ -79,8 +79,8 @@ runtime_benchmarks! {
 
 	enable_charge_fee_pool {
 		let funder: AccountId = account("funder", 0, SEED);
-		let treasury_account: AccountId = TreasuryPalletId::get().into_account();
-		let sub_account: AccountId = <Runtime as module_transaction_payment::Config>::PalletId::get().into_sub_account(STABLECOIN);
+		let treasury_account: AccountId = TreasuryPalletId::get().into_account_truncating();
+		let sub_account: AccountId = <Runtime as module_transaction_payment::Config>::PalletId::get().into_sub_account_truncating(STABLECOIN);
 		let native_ed: Balance = <Currencies as MultiCurrency<AccountId>>::minimum_balance(NATIVECOIN);
 		let stable_ed: Balance = <Currencies as MultiCurrency<AccountId>>::minimum_balance(STABLECOIN);
 		let pool_size: Balance = native_ed * 50;
@@ -117,8 +117,8 @@ runtime_benchmarks! {
 	}
 
 	disable_charge_fee_pool {
-		let treasury_account: AccountId = TreasuryPalletId::get().into_account();
-		let sub_account: AccountId = <Runtime as module_transaction_payment::Config>::PalletId::get().into_sub_account(STABLECOIN);
+		let treasury_account: AccountId = TreasuryPalletId::get().into_account_truncating();
+		let sub_account: AccountId = <Runtime as module_transaction_payment::Config>::PalletId::get().into_sub_account_truncating(STABLECOIN);
 		let native_ed: Balance = <Currencies as MultiCurrency<AccountId>>::minimum_balance(NATIVECOIN);
 		let stable_ed: Balance = <Currencies as MultiCurrency<AccountId>>::minimum_balance(STABLECOIN);
 		let pool_size: Balance = native_ed * 50;
@@ -149,6 +149,13 @@ runtime_benchmarks! {
 		let call = Box::new(frame_system::Call::remark { remark: vec![] }.into());
 		module_transaction_payment::TokenExchangeRate::<Runtime>::insert(STABLECOIN, Ratio::one());
 	}: _(RawOrigin::Signed(caller.clone()), STABLECOIN, call)
+
+	with_fee_paid_by {
+		let caller: AccountId = whitelisted_caller();
+		let payer: AccountId = account("payer", 0, SEED);
+		let call = Box::new(frame_system::Call::remark { remark: vec![] }.into());
+		let signature = sp_runtime::MultiSignature::Sr25519(sp_core::sr25519::Signature([0u8; 64]));
+	}: _(RawOrigin::Signed(caller.clone()), call, payer, signature)
 
 	on_finalize {
 	}: {

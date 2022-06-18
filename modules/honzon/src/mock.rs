@@ -21,9 +21,10 @@
 #![cfg(test)]
 
 use super::*;
+use cdp_engine::CollateralCurrencyIds;
 use frame_support::{
 	construct_runtime, ord_parameter_types, parameter_types,
-	traits::{Everything, Nothing},
+	traits::{ConstU128, ConstU32, ConstU64, Everything, Nothing},
 	PalletId,
 };
 use frame_system::{offchain::SendTransactionTypes, EnsureSignedBy};
@@ -37,7 +38,7 @@ use sp_runtime::{
 };
 use sp_std::cell::RefCell;
 use support::mocks::MockStableAsset;
-use support::{AuctionManager, ExchangeRate, Price, PriceProvider, Rate, Ratio};
+use support::{AuctionManager, ExchangeRate, Price, PriceProvider, Rate, Ratio, SpecificJointsSwap};
 
 mod honzon {
 	pub use super::super::*;
@@ -55,10 +56,6 @@ pub const AUSD: CurrencyId = CurrencyId::Token(TokenSymbol::AUSD);
 pub const BTC: CurrencyId = CurrencyId::Token(TokenSymbol::RENBTC);
 pub const DOT: CurrencyId = CurrencyId::Token(TokenSymbol::DOT);
 
-parameter_types! {
-	pub const BlockHashCount: u64 = 250;
-}
-
 impl frame_system::Config for Runtime {
 	type Origin = Origin;
 	type Index = u64;
@@ -70,7 +67,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type Version = ();
@@ -83,7 +80,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 parameter_type_with_key! {
@@ -101,22 +98,21 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = ReserveIdentifier;
 	type DustRemovalWhitelist = Nothing;
-}
-
-parameter_types! {
-	pub const ExistentialDeposit: Balance = 1;
-	pub const MaxReserves: u32 = 50;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 impl pallet_balances::Config for Runtime {
 	type Balance = Balance;
 	type DustRemoval = ();
 	type Event = Event;
-	type ExistentialDeposit = ExistentialDeposit;
+	type ExistentialDeposit = ConstU128<1>;
 	type AccountStore = frame_system::Pallet<Runtime>;
 	type MaxLocks = ();
-	type MaxReserves = MaxReserves;
+	type MaxReserves = ConstU32<50>;
 	type ReserveIdentifier = ReserveIdentifier;
 	type WeightInfo = ();
 }
@@ -127,7 +123,6 @@ parameter_types! {
 }
 
 impl orml_currencies::Config for Runtime {
-	type Event = Event;
 	type MultiCurrency = Tokens;
 	type NativeCurrency = AdaptedBasicCurrency;
 	type GetNativeCurrencyId = GetNativeCurrencyId;
@@ -207,9 +202,8 @@ ord_parameter_types! {
 
 parameter_types! {
 	pub const GetStableCurrencyId: CurrencyId = AUSD;
-	pub const MaxAuctionsCount: u32 = 10_000;
 	pub const CDPTreasuryPalletId: PalletId = PalletId(*b"aca/cdpt");
-	pub TreasuryAccount: AccountId = PalletId(*b"aca/hztr").into_account();
+	pub TreasuryAccount: AccountId = PalletId(*b"aca/hztr").into_account_truncating();
 	pub AlternativeSwapPathJointList: Vec<Vec<CurrencyId>> = vec![
 		vec![AUSD],
 	];
@@ -222,66 +216,63 @@ impl cdp_treasury::Config for Runtime {
 	type AuctionManagerHandler = MockAuctionManager;
 	type UpdateOrigin = EnsureSignedBy<One, AccountId>;
 	type DEX = ();
-	type MaxAuctionsCount = MaxAuctionsCount;
+	type Swap = SpecificJointsSwap<(), AlternativeSwapPathJointList>;
+	type MaxAuctionsCount = ConstU32<10_000>;
 	type PalletId = CDPTreasuryPalletId;
 	type TreasuryAccount = TreasuryAccount;
-	type AlternativeSwapPathJointList = AlternativeSwapPathJointList;
 	type WeightInfo = ();
 	type StableAsset = MockStableAsset<CurrencyId, Balance, AccountId, BlockNumber>;
 }
 
-parameter_types! {
-	pub const MinimumPeriod: Moment = 1000;
-}
 impl pallet_timestamp::Config for Runtime {
 	type Moment = Moment;
 	type OnTimestampSet = ();
-	type MinimumPeriod = MinimumPeriod;
+	type MinimumPeriod = ConstU64<1000>;
 	type WeightInfo = ();
 }
 
+parameter_type_with_key! {
+	pub MinimumCollateralAmount: |_currency_id: CurrencyId| -> Balance {
+		10
+	};
+}
+
 parameter_types! {
-	pub CollateralCurrencyIds: Vec<CurrencyId> = vec![BTC, DOT];
 	pub DefaultLiquidationRatio: Ratio = Ratio::saturating_from_rational(3, 2);
-	pub DefaultDebitExchangeRate: ExchangeRate = ExchangeRate::one();
+	pub DefaultDebitExchangeRate: ExchangeRate = ExchangeRate::saturating_from_rational(1, 10);
 	pub DefaultLiquidationPenalty: Rate = Rate::saturating_from_rational(10, 100);
-	pub const MinimumDebitValue: Balance = 2;
 	pub MaxSwapSlippageCompareToOracle: Ratio = Ratio::saturating_from_rational(50, 100);
-	pub const UnsignedPriority: u64 = 1 << 20;
 }
 
 impl cdp_engine::Config for Runtime {
 	type Event = Event;
 	type PriceSource = MockPriceSource;
-	type CollateralCurrencyIds = CollateralCurrencyIds;
 	type DefaultLiquidationRatio = DefaultLiquidationRatio;
 	type DefaultDebitExchangeRate = DefaultDebitExchangeRate;
 	type DefaultLiquidationPenalty = DefaultLiquidationPenalty;
-	type MinimumDebitValue = MinimumDebitValue;
+	type MinimumDebitValue = ConstU128<2>;
+	type MinimumCollateralAmount = MinimumCollateralAmount;
 	type GetStableCurrencyId = GetStableCurrencyId;
 	type CDPTreasury = CDPTreasuryModule;
 	type UpdateOrigin = EnsureSignedBy<One, AccountId>;
 	type MaxSwapSlippageCompareToOracle = MaxSwapSlippageCompareToOracle;
-	type UnsignedPriority = UnsignedPriority;
+	type UnsignedPriority = ConstU64<1048576>; // 1 << 20
 	type EmergencyShutdown = MockEmergencyShutdown;
 	type UnixTime = Timestamp;
 	type Currency = Currencies;
-	type AlternativeSwapPathJointList = AlternativeSwapPathJointList;
 	type DEX = ();
+	type Swap = SpecificJointsSwap<(), AlternativeSwapPathJointList>;
 	type WeightInfo = ();
 }
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Runtime>;
 type Block = frame_system::mocking::MockBlock<Runtime>;
 
-parameter_types! {
-	pub const DepositPerAuthorization: Balance = 100;
-}
-
 impl Config for Runtime {
 	type Event = Event;
 	type Currency = PalletBalances;
-	type DepositPerAuthorization = DepositPerAuthorization;
+	type DepositPerAuthorization = ConstU128<100>;
+	type CollateralCurrencyIds = CollateralCurrencyIds<Runtime>;
 	type WeightInfo = ();
 }
 
@@ -295,7 +286,7 @@ construct_runtime!(
 		HonzonModule: honzon::{Pallet, Storage, Call, Event<T>},
 		Tokens: orml_tokens::{Pallet, Storage, Event<T>, Config<T>},
 		PalletBalances: pallet_balances::{Pallet, Call, Storage, Event<T>},
-		Currencies: orml_currencies::{Pallet, Call, Event<T>},
+		Currencies: orml_currencies::{Pallet, Call},
 		LoansModule: loans::{Pallet, Storage, Call, Event<T>},
 		CDPTreasuryModule: cdp_treasury::{Pallet, Storage, Call, Event<T>},
 		CDPEngineModule: cdp_engine::{Pallet, Storage, Call, Event<T>, Config, ValidateUnsigned},

@@ -24,15 +24,15 @@ use super::*;
 pub use crate as transaction_payment;
 use frame_support::{
 	construct_runtime, ord_parameter_types, parameter_types,
-	traits::{Everything, Nothing},
-	weights::WeightToFeeCoefficients,
+	traits::{ConstU128, ConstU32, ConstU64, Everything, Nothing},
+	weights::{WeightToFeeCoefficients, WeightToFeePolynomial},
 	PalletId,
 };
 use frame_system::EnsureSignedBy;
 use orml_traits::parameter_type_with_key;
 use primitives::{Amount, ReserveIdentifier, TokenSymbol, TradingPair};
 use smallvec::smallvec;
-use sp_core::{crypto::AccountId32, H256};
+use sp_core::{crypto::AccountId32, H160, H256};
 use sp_runtime::{
 	testing::Header,
 	traits::{AccountIdConversion, IdentityLookup, One},
@@ -47,12 +47,12 @@ pub type BlockNumber = u64;
 pub const ALICE: AccountId = AccountId::new([1u8; 32]);
 pub const BOB: AccountId = AccountId::new([2u8; 32]);
 pub const CHARLIE: AccountId = AccountId::new([3u8; 32]);
+pub const DAVE: AccountId = AccountId::new([4u8; 32]);
 pub const ACA: CurrencyId = CurrencyId::Token(TokenSymbol::ACA);
 pub const AUSD: CurrencyId = CurrencyId::Token(TokenSymbol::AUSD);
 pub const DOT: CurrencyId = CurrencyId::Token(TokenSymbol::DOT);
 
 parameter_types! {
-	pub const BlockHashCount: u64 = 250;
 	pub static ExtrinsicBaseWeight: u64 = 0;
 }
 
@@ -82,7 +82,7 @@ impl frame_system::Config for Runtime {
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
-	type BlockHashCount = BlockHashCount;
+	type BlockHashCount = ConstU64<250>;
 	type BlockWeights = BlockWeights;
 	type BlockLength = ();
 	type Version = ();
@@ -95,7 +95,7 @@ impl frame_system::Config for Runtime {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
-	type MaxConsumers = frame_support::traits::ConstU32<16>;
+	type MaxConsumers = ConstU32<16>;
 }
 
 parameter_type_with_key! {
@@ -117,22 +117,21 @@ impl orml_tokens::Config for Runtime {
 	type ExistentialDeposits = ExistentialDeposits;
 	type OnDust = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type DustRemovalWhitelist = Nothing;
-}
-
-parameter_types! {
-	pub const NativeTokenExistentialDeposit: Balance = 10;
-	pub const MaxReserves: u32 = 50;
+	type OnNewTokenAccount = ();
+	type OnKilledTokenAccount = ();
 }
 
 impl pallet_balances::Config for Runtime {
 	type Balance = Balance;
 	type DustRemoval = ();
 	type Event = Event;
-	type ExistentialDeposit = NativeTokenExistentialDeposit;
+	type ExistentialDeposit = ConstU128<10>;
 	type AccountStore = System;
 	type MaxLocks = ();
-	type MaxReserves = MaxReserves;
+	type MaxReserves = ConstU32<50>;
 	type ReserveIdentifier = ReserveIdentifier;
 	type WeightInfo = ();
 }
@@ -141,6 +140,7 @@ pub type AdaptedBasicCurrency = module_currencies::BasicCurrencyAdapter<Runtime,
 
 parameter_types! {
 	pub const GetNativeCurrencyId: CurrencyId = ACA;
+	pub Erc20HoldingAccount: H160 = H160::from_low_u64_be(1);
 }
 
 impl module_currencies::Config for Runtime {
@@ -148,9 +148,11 @@ impl module_currencies::Config for Runtime {
 	type MultiCurrency = Tokens;
 	type NativeCurrency = AdaptedBasicCurrency;
 	type GetNativeCurrencyId = GetNativeCurrencyId;
+	type Erc20HoldingAccount = Erc20HoldingAccount;
 	type WeightInfo = ();
 	type AddressMapping = MockAddressMapping;
 	type EVMBridge = ();
+	type GasToWeight = ();
 	type SweepOrigin = EnsureSignedBy<Zero, AccountId>;
 	type OnDust = ();
 }
@@ -166,12 +168,11 @@ ord_parameter_types! {
 parameter_types! {
 	pub const DEXPalletId: PalletId = PalletId(*b"aca/dexm");
 	pub const GetExchangeFee: (u32, u32) = (0, 100);
-	pub const TradingPathLimit: u32 = 4;
 	pub EnabledTradingPairs: Vec<TradingPair> = vec![
 		TradingPair::from_currency_ids(AUSD, ACA).unwrap(),
 		TradingPair::from_currency_ids(AUSD, DOT).unwrap(),
 	];
-	pub const ExtendedProvisioningBlocks: BlockNumber = 0;
+	pub const TradingPathLimit: u32 = 4;
 }
 
 impl module_dex::Config for Runtime {
@@ -184,20 +185,17 @@ impl module_dex::Config for Runtime {
 	type DEXIncentives = ();
 	type WeightInfo = ();
 	type ListingOrigin = frame_system::EnsureSignedBy<Zero, AccountId>;
-	type ExtendedProvisioningBlocks = ExtendedProvisioningBlocks;
+	type ExtendedProvisioningBlocks = ConstU64<0>;
 	type OnLiquidityPoolUpdated = ();
 }
 
 parameter_types! {
 	pub MaxSwapSlippageCompareToOracle: Ratio = Ratio::saturating_from_rational(1, 2);
 	pub static TransactionByteFee: u128 = 1;
-	pub OperationalFeeMultiplier: u64 = 5;
 	pub static TipPerWeightStep: u128 = 1;
-	pub MaxTipsOfPriority: u128 = 1000;
-	pub DefaultFeeTokens: Vec<CurrencyId> = vec![AUSD, DOT];
+	pub DefaultFeeTokens: Vec<CurrencyId> = vec![AUSD];
 	pub AusdFeeSwapPath: Vec<CurrencyId> = vec![AUSD, ACA];
 	pub DotFeeSwapPath: Vec<CurrencyId> = vec![DOT, AUSD, ACA];
-	pub AlternativeFeeSwapDeposit: Balance = 1000;
 }
 
 thread_local! {
@@ -245,7 +243,7 @@ parameter_types! {
 	pub const HigerSwapThreshold: Balance = 9500;
 	pub const TransactionPaymentPalletId: PalletId = PalletId(*b"aca/fees");
 	pub const TreasuryPalletId: PalletId = PalletId(*b"aca/trsy");
-	pub KaruraTreasuryAccount: AccountId = TreasuryPalletId::get().into_account();
+	pub KaruraTreasuryAccount: AccountId = TreasuryPalletId::get().into_account_truncating();
 }
 ord_parameter_types! {
 	pub const ListingOrigin: AccountId = ALICE;
@@ -257,15 +255,15 @@ impl Config for Runtime {
 	type Event = Event;
 	type Call = Call;
 	type NativeCurrencyId = GetNativeCurrencyId;
-	type AlternativeFeeSwapDeposit = AlternativeFeeSwapDeposit;
+	type AlternativeFeeSwapDeposit = ConstU128<1000>;
 	type Currency = PalletBalances;
 	type MultiCurrency = Currencies;
 	type OnTransactionPayment = DealWithFees;
-	type TransactionByteFee = TransactionByteFee;
-	type OperationalFeeMultiplier = OperationalFeeMultiplier;
+	type OperationalFeeMultiplier = ConstU64<5>;
 	type TipPerWeightStep = TipPerWeightStep;
-	type MaxTipsOfPriority = MaxTipsOfPriority;
+	type MaxTipsOfPriority = ConstU128<1000>;
 	type WeightToFee = WeightToFee;
+	type TransactionByteFee = TransactionByteFee;
 	type FeeMultiplierUpdate = ();
 	type DEX = DEXModule;
 	type MaxSwapSlippageCompareToOracle = MaxSwapSlippageCompareToOracle;

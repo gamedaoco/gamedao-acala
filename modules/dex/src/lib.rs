@@ -181,6 +181,8 @@ pub mod module {
 		InvalidTradingPath,
 		/// Not allowed to refund provision
 		NotAllowedRefund,
+		/// Cannot swap
+		CannotSwap,
 	}
 
 	#[pallet::event]
@@ -344,7 +346,6 @@ pub mod module {
 	}
 
 	#[pallet::pallet]
-	#[pallet::without_storage_info]
 	pub struct Pallet<T>(_);
 
 	#[pallet::hooks]
@@ -430,7 +431,7 @@ pub mod module {
 		}
 
 		/// Add provision to Provisioning trading pair.
-		/// If succecced, will record the provision, but shares issuing will happen after the
+		/// If succeed, will record the provision, but shares issuing will happen after the
 		/// trading pair convert to Enabled status.
 		///
 		/// - `currency_id_a`: currency id A.
@@ -847,7 +848,7 @@ pub mod module {
 
 impl<T: Config> Pallet<T> {
 	fn account_id() -> T::AccountId {
-		T::PalletId::get().into_account()
+		T::PalletId::get().into_account_truncating()
 	}
 
 	fn try_mutate_liquidity_pool<R, E>(
@@ -1412,7 +1413,7 @@ impl<T: Config> Pallet<T> {
 	}
 }
 
-impl<T: Config> DEXManager<T::AccountId, CurrencyId, Balance> for Pallet<T> {
+impl<T: Config> DEXManager<T::AccountId, Balance, CurrencyId> for Pallet<T> {
 	fn get_liquidity_pool(currency_id_a: CurrencyId, currency_id_b: CurrencyId) -> (Balance, Balance) {
 		Self::get_liquidity(currency_id_a, currency_id_b)
 	}
@@ -1459,7 +1460,7 @@ impl<T: Config> DEXManager<T::AccountId, CurrencyId, Balance> for Pallet<T> {
 		target_currency_id: CurrencyId,
 		limit: SwapLimit<Balance>,
 		alternative_path_joint_list: Vec<Vec<CurrencyId>>,
-	) -> Option<Vec<CurrencyId>> {
+	) -> Option<(Vec<CurrencyId>, Balance, Balance)> {
 		let default_swap_path = vec![supply_currency_id, target_currency_id];
 		let mut maybe_best = Self::get_swap_amount(&default_swap_path, limit)
 			.map(|(supply_amout, target_amount)| (default_swap_path, supply_amout, target_amount));
@@ -1490,7 +1491,7 @@ impl<T: Config> DEXManager<T::AccountId, CurrencyId, Balance> for Pallet<T> {
 			}
 		}
 
-		maybe_best.map(|(path, _, _)| path)
+		maybe_best
 	}
 
 	fn swap_with_specific_path(

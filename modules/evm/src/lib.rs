@@ -199,10 +199,6 @@ pub mod module {
 		type PrecompilesType: PrecompileSet;
 		type PrecompilesValue: Get<Self::PrecompilesType>;
 
-		/// Chain ID of EVM.
-		#[pallet::constant]
-		type ChainId: Get<u64>;
-
 		/// Convert gas to weight.
 		type GasToWeight: Convert<u64, Weight>;
 
@@ -291,6 +287,13 @@ pub mod module {
 		pub enable_contract_development: bool,
 	}
 
+	/// The EVM Chain ID.
+	///
+	/// ChainId: u64
+	#[pallet::storage]
+	#[pallet::getter(fn chain_id)]
+	pub type ChainId<T: Config> = StorageValue<_, u64, ValueQuery>;
+
 	/// The EVM accounts info.
 	///
 	/// Accounts: map EvmAddress => Option<AccountInfo<T>>
@@ -346,6 +349,7 @@ pub mod module {
 
 	#[pallet::genesis_config]
 	pub struct GenesisConfig<T: Config> {
+		pub chain_id: u64,
 		pub accounts: BTreeMap<EvmAddress, GenesisAccount<BalanceOf<T>, T::Index>>,
 	}
 
@@ -353,6 +357,7 @@ pub mod module {
 	impl<T: Config> Default for GenesisConfig<T> {
 		fn default() -> Self {
 			GenesisConfig {
+				chain_id: Default::default(),
 				accounts: Default::default(),
 			}
 		}
@@ -418,16 +423,14 @@ pub mod module {
 					);
 
 					let out = runtime.machine().return_value();
-					<Pallet<T>>::create_contract(source, *address, out);
-
-					#[cfg(not(feature = "with-ethereum-compatibility"))]
-					<Pallet<T>>::mark_published(*address, None).expect("Genesis contract failed to publish");
+					<Pallet<T>>::create_contract(source, *address, true, out);
 
 					for (index, value) in &account.storage {
 						AccountStorages::<T>::insert(address, index, value);
 					}
 				}
 			});
+			ChainId::<T>::put(self.chain_id);
 			NetworkContractIndex::<T>::put(MIRRORED_NFT_ADDRESS_START);
 		}
 	}
@@ -996,10 +999,7 @@ pub mod module {
 		) -> DispatchResultWithPostInfo {
 			T::NetworkContractOrigin::ensure_origin(origin)?;
 
-			ensure!(
-				Pallet::<T>::is_account_empty(&target),
-				Error::<T>::ContractAlreadyExisted
-			);
+			ensure!(Self::accounts(target).is_none(), Error::<T>::ContractAlreadyExisted);
 
 			let source = T::NetworkContractSource::get();
 			let source_account = T::AddressMapping::get_account_id(&source);
@@ -1038,11 +1038,12 @@ pub mod module {
 				}
 				Ok(info) => {
 					let used_gas: u64 = info.used_gas.unique_saturated_into();
+					let contract = info.value;
 
 					if info.exit_reason.is_succeed() {
 						Pallet::<T>::deposit_event(Event::<T>::Created {
 							from: source,
-							contract: info.value,
+							contract,
 							logs: info.logs,
 							used_gas,
 							used_storage: info.used_storage,
@@ -1050,12 +1051,17 @@ pub mod module {
 					} else {
 						Pallet::<T>::deposit_event(Event::<T>::CreatedFailed {
 							from: source,
-							contract: info.value,
+							contract,
 							exit_reason: info.exit_reason.clone(),
 							logs: info.logs,
 							used_gas,
 							used_storage: Default::default(),
 						});
+					}
+
+					if info.exit_reason.is_succeed() {
+						Self::mark_published(contract, Some(source))?;
+						Pallet::<T>::deposit_event(Event::<T>::ContractPublished { contract });
 					}
 
 					Ok(PostDispatchInfo {
@@ -1194,7 +1200,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// Remove an account if its empty.
-	/// Unused now.
+	/// Keep the non-zero nonce exists.
 	pub fn remove_account_if_empty(address: &H160) {
 		if Self::is_account_empty(address) {
 			let res = Self::remove_account(address);
@@ -1245,7 +1251,8 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// Removes an account from Accounts and AccountStorages.
-	pub fn remove_account(address: &EvmAddress) -> DispatchResult {
+	/// Only used in `remove_account_if_empty`
+	fn remove_account(address: &EvmAddress) -> DispatchResult {
 		// Deref code, and remove it if ref count is zero.
 		Accounts::<T>::mutate_exists(&address, |maybe_account| {
 			if let Some(account) = maybe_account {
@@ -1283,7 +1290,7 @@ impl<T: Config> Pallet<T> {
 	/// - Update codes info.
 	/// - Update maintainer of the contract.
 	/// - Save `code` if not saved yet.
-	pub fn create_contract(source: H160, address: H160, code: Vec<u8>) {
+	pub fn create_contract(source: H160, address: H160, publish: bool, code: Vec<u8>) {
 		let bounded_code: BoundedVec<u8, MaxCodeSize> = code
 			.try_into()
 			.expect("checked by create_contract_limit in ACALA_CONFIG; qed");
@@ -1292,13 +1299,8 @@ impl<T: Config> Pallet<T> {
 		}
 
 		// if source is account, the maintainer of the new contract is source.
-		// if source is contract, the maintainer of the new contract is the maintainer of the contract.
-		let maintainer = Self::accounts(source).map_or(source, |account_info| {
-			account_info
-				.contract_info
-				.map_or(source, |contract_info| contract_info.maintainer)
-		});
-
+		// if source is contract, the maintainer of the new contract is the source contract.
+		let maintainer = source;
 		let code_hash = code_hash(bounded_code.as_slice());
 		let code_size = bounded_code.len() as u32;
 
@@ -1308,7 +1310,7 @@ impl<T: Config> Pallet<T> {
 			#[cfg(feature = "with-ethereum-compatibility")]
 			published: true,
 			#[cfg(not(feature = "with-ethereum-compatibility"))]
-			published: false,
+			published: publish,
 		};
 
 		CodeInfos::<T>::mutate_exists(&code_hash, |maybe_code_info| {
@@ -1383,6 +1385,16 @@ impl<T: Config> Pallet<T> {
 	/// Get code at given address.
 	pub fn code_at_address(address: &EvmAddress) -> BoundedVec<u8, MaxCodeSize> {
 		Self::codes(&Self::code_hash_at_address(address))
+	}
+
+	pub fn is_contract(address: &EvmAddress) -> bool {
+		matches!(
+			Self::accounts(address),
+			Some(AccountInfo {
+				contract_info: Some(_),
+				..
+			})
+		)
 	}
 
 	pub fn update_contract_storage_size(address: &EvmAddress, change: i32) {
@@ -1478,7 +1490,7 @@ impl<T: Config> Pallet<T> {
 	///
 	/// - Ensures signer is maintainer or root.
 	/// - Update codes info.
-	/// - Save `code`if not saved yet.
+	/// - Save `code` if not saved yet.
 	fn do_set_code(root_or_signed: Either<(), T::AccountId>, contract: EvmAddress, code: Vec<u8>) -> DispatchResult {
 		Accounts::<T>::mutate(contract, |maybe_account_info| -> DispatchResult {
 			let account_info = maybe_account_info.as_mut().ok_or(Error::<T>::ContractNotFound)?;
@@ -1503,20 +1515,20 @@ impl<T: Config> Pallet<T> {
 			let code_hash = code_hash(bounded_code.as_slice());
 			let code_size = bounded_code.len() as u32;
 			// The code_hash of the same contract is definitely different.
-			// The `contract_info.code_hash` hashed by on_contract_initialization which constructored.
+			// The `contract_info.code_hash` hashed by on_contract_initialization which constructed.
 			// Still check it here.
 			if code_hash == contract_info.code_hash {
 				return Ok(());
 			}
 
-			let storage_size_chainged: i32 =
+			let storage_size_changed: i32 =
 				code_size.saturating_add(T::NewContractExtraBytes::get()) as i32 - old_code_info.code_size as i32;
 
-			if storage_size_chainged.is_positive() {
-				Self::reserve_storage(&source, storage_size_chainged as u32)?;
+			if storage_size_changed.is_positive() {
+				Self::reserve_storage(&source, storage_size_changed as u32)?;
 			}
-			Self::charge_storage(&source, &contract, storage_size_chainged)?;
-			Self::update_contract_storage_size(&contract, storage_size_chainged);
+			Self::charge_storage(&source, &contract, storage_size_changed)?;
+			Self::update_contract_storage_size(&contract, storage_size_changed);
 
 			// try remove old codes
 			CodeInfos::<T>::mutate_exists(&contract_info.code_hash, |maybe_code_info| -> DispatchResult {
@@ -1579,7 +1591,7 @@ impl<T: Config> Pallet<T> {
 			// when rpc is called, from is empty, allowing the call
 			published || maintainer == *caller || Self::is_developer_or_contract(caller) || *caller == H160::default()
 		} else {
-			// contract non exist, we don't override defualt evm behaviour
+			// contract non exist, we don't override default evm behaviour
 			true
 		}
 	}
@@ -1608,7 +1620,8 @@ impl<T: Config> Pallet<T> {
 			caller, user, limit, amount
 		);
 
-		T::Currency::reserve_named(&RESERVE_ID_STORAGE_DEPOSIT, &user, amount)
+		T::ChargeTransactionPayment::reserve_fee(&user, amount, Some(RESERVE_ID_STORAGE_DEPOSIT))?;
+		Ok(())
 	}
 
 	fn unreserve_storage(caller: &H160, limit: u32, used: u32, refunded: u32) -> DispatchResult {
@@ -1629,7 +1642,7 @@ impl<T: Config> Pallet<T> {
 
 		// should always be able to unreserve the amount
 		// but otherwise we will just ignore the issue here.
-		let err_amount = T::Currency::unreserve_named(&RESERVE_ID_STORAGE_DEPOSIT, &user, amount);
+		let err_amount = T::ChargeTransactionPayment::unreserve_fee(&user, amount, Some(RESERVE_ID_STORAGE_DEPOSIT));
 		debug_assert!(err_amount.is_zero());
 		Ok(())
 	}
@@ -1641,7 +1654,7 @@ impl<T: Config> Pallet<T> {
 
 		let user = T::AddressMapping::get_account_id(caller);
 		let contract_acc = T::AddressMapping::get_account_id(contract);
-		let amount = Self::get_storage_deposit_per_byte().saturating_mul((storage.abs() as u32).into());
+		let amount = Self::get_storage_deposit_per_byte().saturating_mul(storage.unsigned_abs().into());
 
 		log::debug!(
 			target: "evm",
@@ -1773,6 +1786,13 @@ impl<T: Config> EVMTrait<T::AccountId> for Pallet<T> {
 	}
 }
 
+pub struct EvmChainId<T>(PhantomData<T>);
+impl<T: Config> Get<u64> for EvmChainId<T> {
+	fn get() -> u64 {
+		Pallet::<T>::chain_id()
+	}
+}
+
 impl<T: Config> EVMManager<T::AccountId, BalanceOf<T>> for Pallet<T> {
 	fn query_new_contract_extra_bytes() -> u32 {
 		T::NewContractExtraBytes::get()
@@ -1824,12 +1844,8 @@ pub struct CallKillAccount<T>(PhantomData<T>);
 impl<T: Config> OnKilledAccount<T::AccountId> for CallKillAccount<T> {
 	fn on_killed_account(who: &T::AccountId) {
 		if let Some(address) = T::AddressMapping::get_evm_address(who) {
-			let res = Pallet::<T>::remove_account(&address);
-			debug_assert!(res.is_ok());
+			Pallet::<T>::remove_account_if_empty(&address);
 		}
-		let address = T::AddressMapping::get_default_evm_address(who);
-		let res = Pallet::<T>::remove_account(&address);
-		debug_assert!(res.is_ok());
 	}
 }
 
@@ -1963,7 +1979,7 @@ impl<T: Config> DispatchableTask for EvmTask<T> {
 						);
 
 						// Remove account after all of the storages are cleared.
-						Accounts::<T>::take(contract);
+						Pallet::<T>::remove_account_if_empty(&contract);
 
 						TaskResult {
 							result: res,

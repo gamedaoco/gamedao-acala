@@ -16,15 +16,17 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{AccountId, AssetRegistry, DispatchResult, PoolAssetLimit, Runtime, StableAsset};
+use crate::{AccountId, AssetRegistry, DispatchResult, Runtime, StableAsset};
 
 use super::utils::set_balance_fungibles;
 use frame_benchmarking::{account, whitelisted_caller};
+use frame_support::traits::Get;
 use frame_system::RawOrigin;
-use module_asset_registry::AssetMetadata;
 use orml_benchmarking::runtime_benchmarks;
-use primitives::currency::{CurrencyId, AUSD, BNC, LDOT, VSKSM};
-use primitives::{DexShare, TokenSymbol};
+use primitives::{
+	currency::{AssetMetadata, CurrencyId, AUSD, BNC, LDOT, VSKSM},
+	DexShare, TokenSymbol,
+};
 use sp_std::prelude::*;
 
 const SEED: u32 = 0;
@@ -96,7 +98,7 @@ runtime_benchmarks! {
 
 	mint {
 		let tester: AccountId = whitelisted_caller();
-		let u in 2 .. PoolAssetLimit::get() as u32;
+		let u in 2u32 .. <Runtime as nutsfinance_stable_asset::Config>::PoolAssetLimit::get();
 		let mut assets = vec![];
 		let mut precisions = vec![];
 		let mut mint_args = vec![];
@@ -116,7 +118,7 @@ runtime_benchmarks! {
 
 	swap {
 		let tester: AccountId = whitelisted_caller();
-		let u in 2 .. PoolAssetLimit::get() as u32;
+		let u in 2u32 .. <Runtime as nutsfinance_stable_asset::Config>::PoolAssetLimit::get();
 		let mut assets = vec![];
 		let mut precisions = vec![];
 		let mut mint_args = vec![];
@@ -137,7 +139,7 @@ runtime_benchmarks! {
 
 	redeem_proportion {
 		let tester: AccountId = whitelisted_caller();
-		let u in 2 .. PoolAssetLimit::get() as u32;
+		let u in 2u32 .. <Runtime as nutsfinance_stable_asset::Config>::PoolAssetLimit::get();
 		let mut assets = vec![];
 		let mut precisions = vec![];
 		let mut mint_args = vec![];
@@ -161,7 +163,7 @@ runtime_benchmarks! {
 	redeem_single {
 		let tester: AccountId = whitelisted_caller();
 		let pool_asset = CurrencyId::StableAssetPoolToken(0);
-		let u in 2 .. PoolAssetLimit::get() as u32;
+		let u in 2u32 .. <Runtime as nutsfinance_stable_asset::Config>::PoolAssetLimit::get();
 		let mut assets = vec![];
 		let mut precisions = vec![];
 		let mut mint_args = vec![];
@@ -182,7 +184,7 @@ runtime_benchmarks! {
 
 	redeem_multi {
 		let tester: AccountId = whitelisted_caller();
-		let u in 2 .. PoolAssetLimit::get() as u32;
+		let u in 2u32 .. <Runtime as nutsfinance_stable_asset::Config>::PoolAssetLimit::get();
 		let mut assets = vec![];
 		let mut precisions = vec![];
 		let mut mint_args = vec![];

@@ -17,7 +17,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::setup::*;
-use module_asset_registry::AssetMetadata;
+use primitives::currency::AssetMetadata;
 
 #[test]
 fn test_dex_module() {
@@ -219,7 +219,7 @@ fn test_trading_pair() {
 
 			assert_ok!(AssetRegistry::register_foreign_asset(
 				Origin::root(),
-				Box::new(MultiLocation::new(1, X2(Parachain(2001), GeneralKey(KAR.encode()))).into()),
+				Box::new(MultiLocation::new(1, X2(Parachain(2002), GeneralKey(KAR.encode()))).into()),
 				Box::new(AssetMetadata {
 					name: b"Sibling Token".to_vec(),
 					symbol: b"ST".to_vec(),

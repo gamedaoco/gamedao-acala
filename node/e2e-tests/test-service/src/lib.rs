@@ -17,13 +17,17 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! Crate used for testing with acala.
+#[macro_use]
+
 mod builder;
 mod node;
+mod rpc;
 mod service;
 
 use futures::channel::{mpsc, oneshot};
 use std::{future::Future, sync::Arc, time::Duration};
 
+use cumulus_client_cli::CollatorOptions;
 use cumulus_client_consensus_aura::{AuraConsensus, BuildAuraConsensusParams, SlotProportion};
 use cumulus_client_consensus_common::{ParachainCandidate, ParachainConsensus};
 use cumulus_client_network::BlockAnnounceValidator;
@@ -32,35 +36,38 @@ use cumulus_client_service::{
 	StartFullNodeParams,
 };
 use cumulus_primitives_core::ParaId;
-use cumulus_relay_chain_local::RelayChainLocal;
+use cumulus_relay_chain_inprocess_interface::RelayChainInProcessInterface;
+use cumulus_relay_chain_interface::{RelayChainError, RelayChainInterface, RelayChainResult};
+use cumulus_relay_chain_rpc_interface::RelayChainRPCInterface;
 
 use frame_system_rpc_runtime_api::AccountNonceApi;
 use futures::{channel::mpsc::Sender, SinkExt};
+use jsonrpsee::RpcModule;
 use parking_lot::Mutex;
-use polkadot_primitives::v0::HeadData;
-use polkadot_primitives::v1::{CollatorPair, Hash as PHash, PersistedValidationData};
-use polkadot_service::ProvideRuntimeApi;
+use polkadot_primitives::v2::{CollatorPair, Hash as PHash, HeadData, PersistedValidationData};
 use sc_client_api::{execution_extensions::ExecutionStrategies, Backend, CallExecutor, ExecutorProvider};
 use sc_consensus::LongestChain;
 use sc_consensus_aura::{ImportQueueParams, StartAuraParams};
 use sc_consensus_manual_seal::{
-	rpc::{ManualSeal, ManualSealApi},
+	rpc::{ManualSeal, ManualSealApiServer},
 	EngineCommand,
 };
-use sc_executor::NativeElseWasmExecutor;
+use sc_executor::{NativeElseWasmExecutor, WasmExecutionMethod, WasmtimeInstantiationStrategy};
 use sc_network::{config::TransportConfig, multiaddr, NetworkService};
+pub use sc_rpc::SubscriptionTaskExecutor;
 use sc_service::{
 	config::{
 		DatabaseSource, KeepBlocks, KeystoreConfig, MultiaddrWithPeerId, NetworkConfiguration, OffchainWorkerConfig,
-		PruningMode, TransactionStorageMode, WasmExecutionMethod,
+		PruningMode,
 	},
 	BasePath, ChainSpec, Configuration, PartialComponents, Role, RpcHandlers, SpawnTasksParams, TFullBackend,
 	TFullCallExecutor, TFullClient, TaskManager,
 };
 use sc_transaction_pool_api::TransactionPool;
+use sp_api::ProvideRuntimeApi;
 use sp_api::{OverlayedChanges, StorageTransactionCache};
 use sp_arithmetic::traits::SaturatedConversion;
-use sp_blockchain::HeaderBackend;
+use sp_blockchain::{Error as BlockChainError, HeaderBackend, HeaderMetadata};
 use sp_core::{ExecutionContext, Pair, H256};
 use sp_keyring::Sr25519Keyring;
 use sp_runtime::{
@@ -73,9 +80,8 @@ use sp_runtime::{
 };
 use sp_state_machine::{BasicExternalities, Ext};
 use sp_trie::PrefixedMemoryDB;
-use substrate_test_client::{
-	sp_consensus::SlotData, BlockchainEventsExt, RpcHandlersExt, RpcTransactionError, RpcTransactionOutput,
-};
+use substrate_test_client::{BlockchainEventsExt, RpcHandlersExt, RpcTransactionError, RpcTransactionOutput};
+use url::Url;
 
 use node_primitives::{signature::AcalaMultiSignature, AccountId, Address, Balance, Signature};
 use node_runtime::{Block, BlockId, Hash, Header, Runtime, RuntimeApi, SignedExtra};

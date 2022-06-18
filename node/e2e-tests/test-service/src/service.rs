@@ -75,7 +75,7 @@ pub fn new_partial(
 		}
 		SealMode::DevAuraSeal => {
 			// aura import queue
-			let slot_duration = sc_consensus_aura::slot_duration(&*client)?.slot_duration();
+			let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
 			let client_for_cidp = client.clone();
 
 			(
@@ -95,7 +95,7 @@ pub fn new_partial(
 								let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
 
 								let slot =
-									sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_duration(
+									sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
 										*timestamp,
 										slot_duration,
 									);
@@ -132,9 +132,9 @@ pub fn new_partial(
 			let create_inherent_data_providers = Box::new(move |_, _| async move {
 				let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
 
-				let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_duration(
+				let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
 					*timestamp,
-					slot_duration.slot_duration(),
+					slot_duration,
 				);
 
 				Ok((timestamp, slot))
@@ -231,11 +231,11 @@ pub async fn start_dev_node(
 
 	match seal_mode {
 		SealMode::DevInstantSeal => {
-			let slot_duration = sc_consensus_aura::slot_duration(&*client)?.slot_duration();
+			let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
 			let create_inherent_data_providers = Box::new(move |_, _| async move {
 				let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
 
-				let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_duration(
+				let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
 					*timestamp,
 					slot_duration,
 				);
@@ -264,7 +264,7 @@ pub async fn start_dev_node(
 		SealMode::DevAuraSeal => {
 			// aura
 			let can_author_with = sp_consensus::CanAuthorWithNativeVersion::new(client.executor().clone());
-			let slot_duration = sc_consensus_aura::slot_duration(&*client)?.slot_duration();
+			let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
 			let client_for_cidp = client.clone();
 
 			let aura = sc_consensus_aura::start_aura::<
@@ -297,7 +297,7 @@ pub async fn start_dev_node(
 					async move {
 						let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
 
-						let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_duration(
+						let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
 							*timestamp,
 							slot_duration,
 						);
@@ -343,6 +343,18 @@ pub async fn start_dev_node(
 		}
 	}
 
+	let rpc_builder = {
+		let client = client.clone();
+		move |_, _| {
+			let deps = crate::rpc::FullDeps {
+				client: client.clone(),
+				command_sink: rpc_sink.clone(),
+				_marker: Default::default(),
+			};
+			crate::rpc::create_full(deps).map_err(Into::into)
+		}
+	};
+
 	let rpc_handlers = sc_service::spawn_tasks(SpawnTasksParams {
 		config,
 		client: client.clone(),
@@ -350,11 +362,7 @@ pub async fn start_dev_node(
 		task_manager: &mut task_manager,
 		keystore: keystore_container.sync_keystore(),
 		transaction_pool: transaction_pool.clone(),
-		rpc_extensions_builder: Box::new(move |_, _| {
-			let mut io = jsonrpc_core::IoHandler::default();
-			io.extend_with(ManualSealApi::to_delegate(ManualSeal::new(rpc_sink.clone())));
-			Ok(io)
-		}),
+		rpc_builder: Box::new(rpc_builder),
 		network: network.clone(),
 		system_rpc_tx,
 		telemetry: None,
@@ -373,6 +381,35 @@ pub async fn start_dev_node(
 	))
 }
 
+async fn build_relay_chain_interface(
+	relay_chain_config: Configuration,
+	collator_key: Option<CollatorPair>,
+	collator_options: CollatorOptions,
+	task_manager: &mut TaskManager,
+) -> RelayChainResult<Arc<dyn RelayChainInterface + 'static>> {
+	if let Some(relay_chain_url) = collator_options.relay_chain_rpc_url {
+		return Ok(Arc::new(RelayChainRPCInterface::new(relay_chain_url).await?) as Arc<_>);
+	}
+
+	let relay_chain_full_node = polkadot_test_service::new_full(
+		relay_chain_config,
+		if let Some(ref key) = collator_key {
+			polkadot_service::IsCollator::Yes(key.clone())
+		} else {
+			polkadot_service::IsCollator::Yes(CollatorPair::generate().0)
+		},
+		None,
+	)?;
+
+	task_manager.add_child(relay_chain_full_node.task_manager);
+	Ok(Arc::new(RelayChainInProcessInterface::new(
+		relay_chain_full_node.client.clone(),
+		relay_chain_full_node.backend.clone(),
+		Arc::new(Mutex::new(Box::new(relay_chain_full_node.network.clone()))),
+		relay_chain_full_node.overseer_handle,
+	)) as Arc<_>)
+}
+
 /// Start a node with the given parachain `Configuration` and relay chain `Configuration`.
 ///
 /// This is the actual implementation that is abstract over the executor and the runtime api.
@@ -381,6 +418,7 @@ pub async fn start_node_impl<RB>(
 	parachain_config: Configuration,
 	collator_key: Option<CollatorPair>,
 	relay_chain_config: Configuration,
+	collator_options: CollatorOptions,
 	para_id: ParaId,
 	wrap_announce_block: Option<Box<dyn FnOnce(AnnounceBlockFn) -> AnnounceBlockFn>>,
 	rpc_ext_builder: RB,
@@ -396,7 +434,7 @@ pub async fn start_node_impl<RB>(
 	Sender<EngineCommand<H256>>,
 )>
 where
-	RB: Fn(Arc<Client>) -> Result<jsonrpc_core::IoHandler<sc_rpc::Metadata>, sc_service::Error> + Send + 'static,
+	RB: Fn(Arc<Client>) -> Result<RpcModule<()>, sc_service::Error> + Send + 'static,
 {
 	if matches!(parachain_config.role, Role::Light) {
 		return Err("Light client not supported!".into());
@@ -411,31 +449,21 @@ where
 	let transaction_pool = params.transaction_pool.clone();
 	let mut task_manager = params.task_manager;
 
-	let relay_chain_full_node = polkadot_test_service::new_full(
-		relay_chain_config,
-		if let Some(ref key) = collator_key {
-			polkadot_service::IsCollator::Yes(key.clone())
-		} else {
-			polkadot_service::IsCollator::Yes(CollatorPair::generate().0)
-		},
-		None,
-	)
-	.map_err(|e| match e {
-		polkadot_service::Error::Sub(x) => x,
-		s => s.to_string().into(),
-	})?;
-
 	let client = params.client.clone();
 	let backend = params.backend.clone();
 	let backend_for_node = backend.clone();
 
-	let relay_chain_interface = Arc::new(RelayChainLocal::new(
-		relay_chain_full_node.client.clone(),
-		relay_chain_full_node.backend.clone(),
-		Arc::new(Mutex::new(Box::new(relay_chain_full_node.network.clone()))),
-		relay_chain_full_node.overseer_handle.clone(),
-	));
-	task_manager.add_child(relay_chain_full_node.task_manager);
+	let relay_chain_interface = build_relay_chain_interface(
+		relay_chain_config,
+		collator_key.clone(),
+		collator_options.clone(),
+		&mut task_manager,
+	)
+	.await
+	.map_err(|e| match e {
+		RelayChainError::ServiceError(polkadot_service::Error::Sub(x)) => x,
+		s => s.to_string().into(),
+	})?;
 
 	let block_announce_validator = BlockAnnounceValidator::new(relay_chain_interface.clone(), para_id);
 	let block_announce_validator_builder = move |_| Box::new(block_announce_validator) as Box<_>;
@@ -453,14 +481,14 @@ where
 		warp_sync: None,
 	})?;
 
-	let rpc_extensions_builder = {
+	let rpc_builder = {
 		let client = client.clone();
 
-		Box::new(move |_, _| rpc_ext_builder(client.clone()))
+		move |_, _| rpc_ext_builder(client.clone())
 	};
 
 	let rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
-		rpc_extensions_builder,
+		rpc_builder: Box::new(rpc_builder),
 		client: client.clone(),
 		transaction_pool: transaction_pool.clone(),
 		task_manager: &mut task_manager,
@@ -551,9 +579,9 @@ where
 								let time = sp_timestamp::InherentDataProvider::from_system_time();
 
 								let slot =
-									sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_duration(
+									sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
 										*time,
-										slot_duration.slot_duration(),
+										slot_duration,
 									);
 
 								let parachain_inherent = parachain_inherent.ok_or_else(|| {
@@ -608,6 +636,7 @@ where
 			// the recovery delay of pov-recovery. We don't want to wait for too
 			// long on the full node to recover, so we reduce this time here.
 			relay_chain_slot_duration: Duration::from_millis(6),
+			collator_options,
 		};
 
 		start_full_node(params)?;

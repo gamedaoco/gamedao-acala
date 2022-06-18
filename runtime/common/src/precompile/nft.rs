@@ -16,6 +16,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+use super::{
+	input::{Input, InputT, Output},
+	target_gas_limit,
+};
 use frame_support::{
 	log,
 	traits::tokens::nonfungibles::{Inspect, Transfer},
@@ -26,15 +30,12 @@ use module_evm::{
 	Context, ExitError, ExitRevert, ExitSucceed,
 };
 use module_support::AddressMapping;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use orml_traits::InspectExtended;
+use primitives::nft::NFTBalance;
 use sp_core::H160;
 use sp_runtime::RuntimeDebug;
 use sp_std::{marker::PhantomData, prelude::*};
-
-use orml_traits::InspectExtended;
-
-use super::input::{Input, InputT, Output};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use primitives::nft::NFTBalance;
 
 /// The `NFT` impl precompile.
 ///
@@ -59,12 +60,13 @@ impl<Runtime> Precompile for NFTPrecompile<Runtime>
 where
 	Runtime: module_evm::Config + module_prices::Config + module_nft::Config,
 	module_nft::Pallet<Runtime>: InspectExtended<Runtime::AccountId, Balance = NFTBalance>
-		+ Inspect<Runtime::AccountId, InstanceId = u64, ClassId = u32>
+		+ Inspect<Runtime::AccountId, ItemId = u64, CollectionId = u32>
 		+ Transfer<Runtime::AccountId>,
 {
 	fn execute(input: &[u8], target_gas: Option<u64>, _context: &Context, _is_static: bool) -> PrecompileResult {
 		let input = Input::<Action, Runtime::AccountId, Runtime::AddressMapping, Runtime::Erc20InfoMapping>::new(
-			input, target_gas,
+			input,
+			target_gas_limit(target_gas),
 		);
 
 		let gas_cost = Pricer::<Runtime>::cost(&input)?;
@@ -90,7 +92,7 @@ where
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: 0,
-					output: Output::default().encode_u128(balance),
+					output: Output::encode_uint(balance),
 					logs: Default::default(),
 				})
 			}
@@ -110,7 +112,7 @@ where
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: 0,
-					output: Output::default().encode_address(&owner),
+					output: Output::encode_address(owner),
 					logs: Default::default(),
 				})
 			}
@@ -127,7 +129,7 @@ where
 					.map_err(|e| PrecompileFailure::Revert {
 						exit_status: ExitRevert::Reverted,
 						output: Into::<&str>::into(e).as_bytes().to_vec(),
-						cost: target_gas.unwrap_or_default(),
+						cost: target_gas_limit(target_gas).unwrap_or_default(),
 					})?;
 
 				Ok(PrecompileOutput {

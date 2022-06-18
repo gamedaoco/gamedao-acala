@@ -19,6 +19,11 @@
 // Disable the following lints
 #![allow(clippy::type_complexity)]
 
+use super::{
+	input::{Input, InputT, Output},
+	target_gas_limit,
+};
+use codec::{Decode, Encode};
 use frame_support::{
 	dispatch::Dispatchable,
 	ensure, log, parameter_types,
@@ -33,15 +38,12 @@ use module_evm::{
 	Context, ExitError, ExitRevert, ExitSucceed,
 };
 use module_support::{AddressMapping, TransactionPayment};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use pallet_scheduler::TaskAddress;
 use primitives::{Balance, BlockNumber};
 use sp_core::H160;
 use sp_runtime::RuntimeDebug;
 use sp_std::{fmt::Debug, marker::PhantomData, prelude::*};
-
-use super::input::{Input, InputT, Output};
-use codec::{Decode, Encode};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use pallet_scheduler::TaskAddress;
 
 parameter_types! {
 	pub storage EvmSchedulerNextID: u32 = 0u32;
@@ -106,7 +108,8 @@ where
 {
 	fn execute(input: &[u8], target_gas: Option<u64>, _context: &Context, _is_static: bool) -> PrecompileResult {
 		let input = Input::<Action, Runtime::AccountId, Runtime::AddressMapping, Runtime::Erc20InfoMapping>::new(
-			input, target_gas,
+			input,
+			target_gas_limit(target_gas),
 		);
 
 		let gas_cost = Pricer::<Runtime>::cost(&input)?;
@@ -130,7 +133,7 @@ where
 				let gas_limit = input.u64_at(4)?;
 				let storage_limit = input.u32_at(5)?;
 				let min_delay = input.u32_at(6)?;
-				// solidity abi enocde bytes will add an length at input[7]
+				// solidity abi encode bytes will add an length at input[7]
 				let input_len = input.u32_at(8)?;
 				let input_data = input.bytes_at(9, input_len as usize)?;
 
@@ -156,14 +159,16 @@ where
 					use sp_runtime::traits::Convert;
 					let from_account = Runtime::AddressMapping::get_account_id(&from);
 					let weight = <Runtime as module_evm::Config>::GasToWeight::convert(gas_limit);
+					let fee = <module_transaction_payment::ChargeTransactionPayment<Runtime>>::weight_to_fee(weight);
 					_fee = <module_transaction_payment::ChargeTransactionPayment<Runtime>>::reserve_fee(
 						&from_account,
-						weight,
+						fee,
+						None,
 					)
 					.map_err(|e| PrecompileFailure::Revert {
 						exit_status: ExitRevert::Reverted,
 						output: Into::<&str>::into(e).as_bytes().to_vec(),
-						cost: target_gas.unwrap_or_default(),
+						cost: target_gas_limit(target_gas).unwrap_or_default(),
 					})?;
 				}
 
@@ -182,7 +187,7 @@ where
 				let next_id = current_id.checked_add(1).ok_or_else(|| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "Scheduler next id overflow".into(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 				EvmSchedulerNextID::set(&next_id);
 
@@ -217,19 +222,19 @@ where
 				.map_err(|_| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "Schedule failed".into(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Returned,
 					cost: 0,
-					output: Output::default().encode_bytes(&task_id),
+					output: Output::encode_bytes(&task_id),
 					logs: Default::default(),
 				})
 			}
 			Action::Cancel => {
 				let from = input.evm_address_at(1)?;
-				// solidity abi enocde bytes will add an length at input[2]
+				// solidity abi encode bytes will add an length at input[2]
 				let task_id_len = input.u32_at(3)?;
 				let task_id = input.bytes_at(4, task_id_len as usize)?;
 
@@ -243,14 +248,14 @@ where
 				let task_info = TaskInfo::decode(&mut &task_id[..]).map_err(|_| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "Decode task_id failed".into(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 				ensure!(
 					task_info.sender == from,
 					PrecompileFailure::Revert {
 						exit_status: ExitRevert::Reverted,
 						output: "NoPermission".into(),
-						cost: target_gas.unwrap_or_default(),
+						cost: target_gas_limit(target_gas).unwrap_or_default(),
 					}
 				);
 
@@ -262,16 +267,17 @@ where
 				.map_err(|_| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "Cancel schedule failed".into(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 
 				#[cfg(not(feature = "with-ethereum-compatibility"))]
 				{
 					// unreserve the transaction fee for gas_limit
 					let from_account = Runtime::AddressMapping::get_account_id(&from);
-					<module_transaction_payment::ChargeTransactionPayment<Runtime>>::unreserve_fee(
+					let _err_amount = <module_transaction_payment::ChargeTransactionPayment<Runtime>>::unreserve_fee(
 						&from_account,
 						task_info.fee,
+						None,
 					);
 				}
 
@@ -285,7 +291,7 @@ where
 			Action::Reschedule => {
 				let from = input.evm_address_at(1)?;
 				let min_delay = input.u32_at(2)?;
-				// solidity abi enocde bytes will add an length at input[3]
+				// solidity abi encode bytes will add an length at input[3]
 				let task_id_len = input.u32_at(4)?;
 				let task_id = input.bytes_at(5, task_id_len as usize)?;
 
@@ -300,14 +306,14 @@ where
 				let task_info = TaskInfo::decode(&mut &task_id[..]).map_err(|_| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "Decode task_id failed".into(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 				ensure!(
 					task_info.sender == from,
 					PrecompileFailure::Revert {
 						exit_status: ExitRevert::Reverted,
 						output: "NoPermission".into(),
-						cost: target_gas.unwrap_or_default(),
+						cost: target_gas_limit(target_gas).unwrap_or_default(),
 					}
 				);
 
@@ -319,7 +325,7 @@ where
 				.map_err(|e| PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: Into::<&str>::into(e).as_bytes().to_vec(),
-					cost: target_gas.unwrap_or_default(),
+					cost: target_gas_limit(target_gas).unwrap_or_default(),
 				})?;
 
 				Ok(PrecompileOutput {
@@ -481,7 +487,7 @@ mod tests {
 			run_to_block(5);
 			#[cfg(not(feature = "with-ethereum-compatibility"))]
 			{
-				assert_eq!(Balances::free_balance(from_account.clone()), 999999930074);
+				assert_eq!(Balances::free_balance(from_account.clone()), 999999931325);
 				assert_eq!(Balances::reserved_balance(from_account), 0);
 				assert_eq!(Balances::free_balance(to_account), 1000000001000);
 			}
@@ -568,7 +574,7 @@ mod tests {
 				Err(PrecompileFailure::Revert {
 					exit_status: ExitRevert::Reverted,
 					output: "NoPermission".into(),
-					cost: 10_000,
+					cost: target_gas_limit(Some(10_000)).unwrap()
 				})
 			);
 

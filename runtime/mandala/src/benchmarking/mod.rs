@@ -20,6 +20,9 @@
 
 use sp_runtime::traits::AccountIdConversion;
 
+use super::{CurrencyId, ACA, DOT, LDOT, RENBTC};
+use sp_std::prelude::*;
+
 pub mod utils;
 
 // module benchmarking
@@ -37,6 +40,7 @@ pub mod evm;
 pub mod evm_accounts;
 pub mod homa;
 pub mod honzon;
+pub mod idle_scheduler;
 pub mod incentives;
 pub mod nominees_election;
 pub mod nutsfinance_stable_asset;
@@ -53,5 +57,9 @@ pub mod tokens;
 pub mod vesting;
 
 pub fn get_vesting_account() -> super::AccountId {
-	super::TreasuryPalletId::get().into_account()
+	super::TreasuryPalletId::get().into_account_truncating()
+}
+
+pub fn get_benchmarking_collateral_currency_ids() -> Vec<CurrencyId> {
+	vec![ACA, DOT, LDOT, RENBTC, CurrencyId::StableAssetPoolToken(0)]
 }
