@@ -132,9 +132,12 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: create_runtime_str!("mandala"),
 	impl_name: create_runtime_str!("mandala"),
 	authoring_version: 1,
-	spec_version: 2080,
+	spec_version: 2083,
 	impl_version: 0,
+	#[cfg(not(feature = "disable-runtime-api"))]
 	apis: RUNTIME_API_VERSIONS,
+	#[cfg(feature = "disable-runtime-api")]
+	apis: sp_version::create_apis_vec![[]],
 	transaction_version: 1,
 	state_version: 0,
 };
@@ -1162,13 +1165,18 @@ impl module_dex::Config for Runtime {
 
 impl module_aggregated_dex::Config for Runtime {
 	type DEX = Dex;
-	type StableAsset = StableAsset;
+	type StableAsset = RebasedStableAsset;
 	type GovernanceOrigin = EnsureRootOrHalfGeneralCouncil;
 	type DexSwapJointList = AlternativeSwapPathJointList;
 	type SwapPathLimit = ConstU32<3>;
-	type RebaseTokenAmountConvertor = ConvertBalanceHoma;
 	type WeightInfo = ();
 }
+
+pub type RebasedStableAsset = module_support::RebasedStableAsset<
+	StableAsset,
+	ConvertBalanceHoma,
+	module_aggregated_dex::RebasedStableAssetErrorConvertor<Runtime>,
+>;
 
 pub type AcalaSwap = module_aggregated_dex::AggregatedSwap<Runtime>;
 
@@ -1195,7 +1203,7 @@ impl module_cdp_treasury::Config for Runtime {
 	type PalletId = CDPTreasuryPalletId;
 	type TreasuryAccount = HonzonTreasuryAccount;
 	type WeightInfo = weights::module_cdp_treasury::WeightInfo<Runtime>;
-	type StableAsset = StableAsset;
+	type StableAsset = RebasedStableAsset;
 }
 
 impl module_transaction_pause::Config for Runtime {

@@ -84,9 +84,9 @@ pub use pallet_timestamp::Call as TimestampCall;
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
 
+use crate::constants::parachains;
 pub use authority::AuthorityConfigImpl;
 pub use constants::{fee::*, time::*};
-use module_support::mocks::MockStableAsset;
 use module_support::ExchangeRateProvider;
 use primitives::currency::AssetIds;
 pub use primitives::{
@@ -125,9 +125,12 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: create_runtime_str!("acala"),
 	impl_name: create_runtime_str!("acala"),
 	authoring_version: 1,
-	spec_version: 2080,
+	spec_version: 2083,
 	impl_version: 0,
+	#[cfg(not(feature = "disable-runtime-api"))]
 	apis: RUNTIME_API_VERSIONS,
+	#[cfg(feature = "disable-runtime-api")]
+	apis: sp_version::create_apis_vec![[]],
 	transaction_version: 1,
 	state_version: 0,
 };
@@ -1103,13 +1106,18 @@ impl module_dex::Config for Runtime {
 
 impl module_aggregated_dex::Config for Runtime {
 	type DEX = Dex;
-	type StableAsset = MockStableAsset<CurrencyId, Balance, AccountId, BlockNumber>;
+	type StableAsset = RebasedStableAsset;
 	type GovernanceOrigin = EnsureRootOrHalfGeneralCouncil;
 	type DexSwapJointList = AlternativeSwapPathJointList;
 	type SwapPathLimit = ConstU32<3>;
-	type RebaseTokenAmountConvertor = ConvertBalanceHoma;
 	type WeightInfo = ();
 }
+
+pub type RebasedStableAsset = module_support::RebasedStableAsset<
+	StableAsset,
+	ConvertBalanceHoma,
+	module_aggregated_dex::RebasedStableAssetErrorConvertor<Runtime>,
+>;
 
 pub type AcalaSwap = module_aggregated_dex::AggregatedSwap<Runtime>;
 
@@ -1141,7 +1149,7 @@ impl module_cdp_treasury::Config for Runtime {
 	type PalletId = CDPTreasuryPalletId;
 	type TreasuryAccount = HonzonTreasuryAccount;
 	type WeightInfo = weights::module_cdp_treasury::WeightInfo<Runtime>;
-	type StableAsset = MockStableAsset<CurrencyId, Balance, AccountId, BlockNumber>;
+	type StableAsset = RebasedStableAsset;
 }
 
 impl module_transaction_pause::Config for Runtime {
@@ -1361,8 +1369,8 @@ impl pallet_proxy::Config for Runtime {
 parameter_types! {
 	pub const NewContractExtraBytes: u32 = 10_000;
 	pub NetworkContractSource: H160 = H160::from_low_u64_be(0);
-	pub DeveloperDeposit: Balance = 1_000 * dollar(ACA);
-	pub PublicationFee: Balance = 1_000_000 * dollar(ACA);
+	pub DeveloperDeposit: Balance = 50 * dollar(ACA);
+	pub PublicationFee: Balance = 10 * dollar(ACA);
 	pub PrecompilesValue: AllPrecompiles<Runtime> = AllPrecompiles::<_>::acala();
 }
 
@@ -1741,8 +1749,31 @@ pub type SignedPayload = generic::SignedPayload<Call, SignedExtra>;
 /// Extrinsic type that has already been checked.
 pub type CheckedExtrinsic = generic::CheckedExtrinsic<AccountId, Call, SignedExtra>;
 /// Executive: handles dispatch to the various modules.
-pub type Executive =
-	frame_executive::Executive<Runtime, Block, frame_system::ChainContext<Runtime>, Runtime, AllPalletsWithSystem, ()>;
+pub type Executive = frame_executive::Executive<
+	Runtime,
+	Block,
+	frame_system::ChainContext<Runtime>,
+	Runtime,
+	AllPalletsWithSystem,
+	XcmInterfaceMigration,
+>;
+
+pub struct XcmInterfaceMigration;
+impl OnRuntimeUpgrade for XcmInterfaceMigration {
+	fn on_runtime_upgrade() -> frame_support::weights::Weight {
+		let _ = <module_xcm_interface::Pallet<Runtime>>::update_xcm_dest_weight_and_fee(
+			Origin::root(),
+			vec![(
+				module_xcm_interface::XcmInterfaceOperation::ParachainFee(Box::new(
+					(1, Parachain(parachains::statemint::ID)).into(),
+				)),
+				Some(4_000_000_000),
+				Some(50_000_000),
+			)],
+		);
+		<Runtime as frame_system::Config>::BlockWeights::get().max_block
+	}
+}
 
 #[cfg(feature = "runtime-benchmarks")]
 #[macro_use]

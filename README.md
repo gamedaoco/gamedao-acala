@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/github/license/AcalaNetwork/Acala?color=green)](https://github.com/AcalaNetwork/Acala/blob/master/LICENSE)
  <br />
 [![Twitter URL](https://img.shields.io/twitter/url?style=social&url=https%3A%2F%2Ftwitter.com%2FAcalaNetwork)](https://twitter.com/AcalaNetwork)
-[![Discord](https://img.shields.io/badge/Discord-gray?logo=discord)](https://discord.gg/vdbFVCH)
+[![Discord](https://img.shields.io/badge/Discord-gray?logo=discord)](https://www.acala.gg/)
 [![Telegram](https://img.shields.io/badge/Telegram-gray?logo=telegram)](https://t.me/AcalaOfficial)
 [![Discourse](https://img.shields.io/badge/Forum-gray?logo=discourse)](https://acala.discourse.group/)
 [![Medium](https://img.shields.io/badge/Medium-gray?logo=medium)](https://medium.com/acalanetwork)
@@ -152,7 +152,7 @@ __Note:__ All build command from Makefile are designed for local development pur
 
 # 6. Bug Bounty :bug:
 
-The Bug Bounty Program includes only on-chain vulnerabilities that can lead to significant economic loss or instability of the network. You check details of the Bug Bounty or Submit a vulnerability here: 
+The Bug Bounty Program includes only on-chain vulnerabilities that can lead to significant economic loss or instability of the network. You check details of the Bug Bounty or Submit a vulnerability here:
 https://immunefi.com/bounty/acala/
 
 # 7. Bench Bot
@@ -284,3 +284,35 @@ This config takes around 2x to 3x longer to build, but produces an more optimize
 ```bash
 make build-release
 ```
+
+# 12. Setup Local EVM+ Test Enviroment
+
+To set up a basic local network you need two things running locally, a node and the eth-rpc-adapter. Setup each service in their respective terminals and then you are free to use your favorite EVM tools locally! (ex: hardhat)
+
+## Setting up local node
+
+#### Compile the node from source code:
+
+```bash
+make run
+```
+
+Note: You may need normal block production for certain workflow, use command below to run node without instant-sealing flag
+
+```bash
+cargo run --features with-mandala-runtime -- --dev -lruntime=debug
+```
+
+#### Run node using docker:
+
+```bash
+docker run -it --rm -p 9944:9944 -p 9933:9933 ghcr.io/acalanetwork/mandala-node:master --dev --ws-external --rpc-port=9933 --rpc-external --rpc-cors=all --rpc-methods=unsafe --tmp -levm=debug --instant-sealing
+```
+
+## Setting up eth-rpc-adapter
+
+```bash
+npx @acala-network/eth-rpc-adapter -l 1
+```
+
+Note: If your usecase needs `eth_getLogs` rpc call, then you need to have a subquery instance to index the local chain. For this case, follow the tutorial found here: [Local Network Tutorial](https://evmdocs.acala.network/network/network-setup/local-development-network)
